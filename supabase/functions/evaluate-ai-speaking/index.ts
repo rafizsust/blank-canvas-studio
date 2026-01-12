@@ -825,12 +825,45 @@ function describeBase64(base64?: string): string {
 
 function parseJsonFromResponse(responseText: string): any {
   try {
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    // First try: direct parse
     return JSON.parse(responseText);
-  } catch (err) {
-    console.error('Error parsing evaluation response:', err);
-    return null;
+  } catch {
+    // Second try: extract JSON object from markdown or other text
+    try {
+      // Remove markdown code blocks if present
+      let cleaned = responseText.replace(/```json\s*/gi, '').replace(/```\s*/gi, '');
+      
+      // Try to find JSON object
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        let jsonStr = jsonMatch[0];
+        
+        // Fix common JSON issues:
+        // 1. Remove trailing commas before } or ]
+        jsonStr = jsonStr.replace(/,(\s*[}\]])/g, '$1');
+        
+        // 2. Fix unescaped quotes in strings (basic heuristic)
+        // This is tricky, so we try parsing first without this fix
+        try {
+          return JSON.parse(jsonStr);
+        } catch {
+          // Try more aggressive cleaning
+          // Remove any control characters that might cause issues
+          jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, (char) => {
+            if (char === '\n' || char === '\r' || char === '\t') return char;
+            return '';
+          });
+          
+          return JSON.parse(jsonStr);
+        }
+      }
+      
+      return JSON.parse(cleaned);
+    } catch (err) {
+      console.error('Error parsing evaluation response:', err);
+      console.error('Response text preview:', responseText.slice(0, 500));
+      return null;
+    }
   }
 }
 
@@ -953,6 +986,30 @@ If there is no speech in the audio, score that criterion as 0.
 
 ${topic ? `TEST TOPIC: ${topic}\n` : ''}${difficulty ? `DIFFICULTY: ${difficulty}\n` : ''}${typeof part2SpeakingDuration === 'number' ? `PART 2 SPEAKING DURATION: ${Math.floor(part2SpeakingDuration)} seconds\n` : ''}${fluencyFlag ? `FLUENCY FLAG: Part 2 was below 80 seconds\n` : ''}
 
+=== CRITICAL: PER-QUESTION EVALUATION REQUIREMENT ===
+You MUST evaluate EVERY question individually. The final band score is the WEIGHTED AVERAGE of all individual question performances.
+
+**SCORING METHODOLOGY:**
+1. For EACH audio recording, assess the response quality:
+   - NO SPEECH or unintelligible: Score 0 for that question
+   - MINIMAL (1-3 words like "yes", "ok", "next", "I don't know"): Score 2.0 for that question
+   - SHORT (4-10 words, single sentence): Score 3.5-4.5 for that question  
+   - ADEQUATE (2-4 sentences, some development): Score 5.0-6.0 for that question
+   - GOOD (well-developed, coherent): Score 6.5-7.5 for that question
+   - EXCELLENT (fully developed, sophisticated): Score 8.0-9.0 for that question
+
+2. Calculate the FINAL band for each criterion by averaging ALL question scores:
+   - Sum individual question scores and divide by total number of questions
+   - Example: If 9 questions with scores [7,7,2,2,2,2,6,2,2] = average 3.5, NOT 7
+
+3. The overall band = arithmetic mean of all four criteria averages, rounded to nearest 0.5
+
+**MANDATORY PENALTY RULES:**
+- If >50% of responses are minimal (1-3 words): Maximum overall band = 4.0
+- If >30% of responses are minimal: Maximum overall band = 5.0  
+- If Part 2 response is under 60 seconds: Reduce fluency score by 1.0 band
+- One-word answers like "yes", "no", "next", "ok" = Score 2.0 maximum for that question
+
 === OFFICIAL IELTS SPEAKING BAND DESCRIPTORS (2025) ===
 You MUST apply these EXACT criteria from the official IELTS Speaking Band Descriptors. Score STRICTLY - do not inflate scores.
 
@@ -1006,12 +1063,13 @@ Band 0: No speech detected
 
 === STRICT SCORING RULES ===
 1. NO SPEECH = Band 0 for all criteria. If audio is silent or has no discernible speech, score 0.
-2. MINIMAL SPEECH (only 1-3 words per question) = Maximum Band 3-4 across all criteria.
-3. SHORT RESPONSES (one sentence answers) = Maximum Band 5 for Fluency & Coherence.
-4. Score each criterion INDEPENDENTLY based ONLY on evidence relevant to that skill.
-5. The overall band = arithmetic mean of all four criteria, rounded to nearest 0.5.
-6. DO NOT inflate scores. Most candidates score between 5.0-7.0. Band 8+ is rare and requires exceptional performance.
+2. MINIMAL SPEECH (only 1-3 words per question) = Score 2.0 for that specific question.
+3. SHORT RESPONSES (one sentence answers) = Maximum Band 4.5 for that specific question.
+4. Score each criterion by AVERAGING scores across ALL questions - not just the best ones.
+5. The overall band = arithmetic mean of all four criteria averages, rounded to nearest 0.5.
+6. DO NOT inflate scores. If most responses are minimal, the overall band MUST be low (3-4).
 7. Apply the SAME standard whether evaluating a single part or the full test.
+8. IMPORTANT: A candidate who answers only 2 out of 9 questions properly CANNOT score above Band 4.
 
 === MODEL ANSWERS (COMPACT) ===
 For each question, provide FOUR short model answers at Band 6, 7, 8, and 9 levels.
@@ -1023,37 +1081,81 @@ To avoid truncated JSON responses, keep answers concise:
 For each band level also include whyBandXWorks (1–2 specific reasons).
 Model answers must be natural and realistic IELTS responses (no bullet lists inside the model answer text).
 
-Respond with JSON in this exact format:
+Respond with JSON in this exact format (IMPORTANT: output ONLY valid JSON, no markdown, no trailing commas):
 {
   "overallBand": number,
-  "fluencyCoherence": { "score": number, "feedback": string, "examples": string[] },
-  "lexicalResource": { "score": number, "feedback": string, "examples": string[], "lexicalUpgrades": [{"original": string, "upgraded": string, "context": string}] },
-  "grammaticalRange": { "score": number, "feedback": string, "examples": string[] },
+  "questionScores": [
+    {"audioKey": "part1-q<id>", "score": number, "wordCount": number, "responseType": "none|minimal|short|adequate|good|excellent"}
+  ],
+  "minimalResponseCount": number,
+  "totalQuestionCount": number,
+  "fluencyCoherence": { "score": number, "feedback": string, "examples": ["example1"] },
+  "lexicalResource": { "score": number, "feedback": string, "examples": ["example1"], "lexicalUpgrades": [{"original": "word", "upgraded": "better_word", "context": "sentence"}] },
+  "grammaticalRange": { "score": number, "feedback": string, "examples": ["example1"] },
   "pronunciation": { "score": number, "feedback": string },
   "partAnalysis": [
-    {"partNumber": 1, "strengths": string[], "improvements": string[]},
-    {"partNumber": 2, "strengths": string[], "improvements": string[]},
-    {"partNumber": 3, "strengths": string[], "improvements": string[]}
+    {"partNumber": 1, "strengths": ["strength1"], "improvements": ["improvement1"]},
+    {"partNumber": 2, "strengths": ["strength1"], "improvements": ["improvement1"]},
+    {"partNumber": 3, "strengths": ["strength1"], "improvements": ["improvement1"]}
   ],
   "modelAnswers": [
-    {"partNumber": number, "questionNumber": number, "question": string, "candidateResponse": string, "modelAnswerBand6": string, "modelAnswerBand7": string, "modelAnswerBand8": string, "modelAnswerBand9": string, "whyBand6Works": string[], "whyBand7Works": string[], "whyBand8Works": string[], "whyBand9Works": string[]}
+    {"partNumber": 1, "questionNumber": 1, "question": "question text", "candidateResponse": "what they said", "questionBandScore": 5.0, "modelAnswerBand6": "model", "modelAnswerBand7": "model", "modelAnswerBand8": "model", "modelAnswerBand9": "model", "whyBand6Works": ["reason"], "whyBand7Works": ["reason"], "whyBand8Works": ["reason"], "whyBand9Works": ["reason"]}
   ],
-  "summary": string,
-  "keyStrengths": string[],
-  "priorityImprovements": string[],
-  "transcripts": { "part1-q<id>": string, "part2-q<id>": string, "part3-q<id>": string }
+  "summary": "overall summary",
+  "keyStrengths": ["strength1"],
+  "priorityImprovements": ["improvement1"],
+  "transcripts": { "part1-q<id>": "transcript text" }
 }
 
-MODEL ANSWER REQUIREMENTS:
-1. The "modelAnswers" array should contain an entry for every question across all parts.
-2. Keep model answers within the word caps above to prevent truncation.
-3. Each whyBandXWorks array should have 1–2 specific reasons.`;
+CRITICAL JSON REQUIREMENTS:
+1. Output ONLY valid JSON - no markdown code blocks, no comments, no trailing commas.
+2. The "questionScores" array MUST contain an entry for EVERY audio recording with the individual band score.
+3. "minimalResponseCount" = count of responses with 1-3 words only.
+4. Each modelAnswer MUST include "questionBandScore" showing the score for that specific question.
+5. Keep all arrays and strings concise to avoid JSON truncation.
+6. Double-check JSON syntax before outputting.`;
 }
 
 function normalizeEvaluationResponse(data: any): any {
   const ensureArray = (val: any) => (Array.isArray(val) ? val : []);
 
-  const overallBand = data.overallBand ?? data.overall_band ?? 0;
+  // Extract question scores for per-question evaluation
+  const questionScores = ensureArray(data.questionScores ?? data.question_scores ?? []);
+  const minimalResponseCount = data.minimalResponseCount ?? data.minimal_response_count ?? 0;
+  const totalQuestionCount = data.totalQuestionCount ?? data.total_question_count ?? questionScores.length;
+
+  // Calculate the overall band based on question scores if provided
+  let overallBand = data.overallBand ?? data.overall_band ?? 0;
+  
+  // VALIDATION: If we have question scores, verify the overall band makes sense
+  if (questionScores.length > 0) {
+    const avgQuestionScore = questionScores.reduce((sum: number, qs: any) => sum + (qs.score ?? 0), 0) / questionScores.length;
+    
+    // Apply penalty caps based on minimal response count
+    let maxAllowedBand = 9.0;
+    const minimalRatio = minimalResponseCount / Math.max(totalQuestionCount, 1);
+    
+    if (minimalRatio > 0.5) {
+      maxAllowedBand = 4.0; // More than 50% minimal responses
+      console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
+    } else if (minimalRatio > 0.3) {
+      maxAllowedBand = 5.0; // More than 30% minimal responses
+      console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
+    }
+    
+    // Cap the overall band if it exceeds the maximum allowed
+    if (overallBand > maxAllowedBand) {
+      console.log(`[evaluate-ai-speaking] Reducing overall band from ${overallBand} to ${maxAllowedBand} due to minimal responses`);
+      overallBand = maxAllowedBand;
+    }
+    
+    // Sanity check: overall band shouldn't be more than 1.5 above average question score
+    if (overallBand > avgQuestionScore + 1.5) {
+      const adjustedBand = Math.round((avgQuestionScore + 1.0) * 2) / 2; // Round to nearest 0.5
+      console.log(`[evaluate-ai-speaking] Adjusting overall band from ${overallBand} to ${adjustedBand} (avg question score: ${avgQuestionScore.toFixed(1)})`);
+      overallBand = Math.min(overallBand, adjustedBand);
+    }
+  }
 
   const normalizeCriterion = (camelKey: string, snakeKey: string) => {
     const val = data[camelKey] ?? data[snakeKey] ?? { score: 0, feedback: '' };
@@ -1086,6 +1188,7 @@ function normalizeEvaluationResponse(data: any): any {
       questionNumber: ma.questionNumber ?? ma.question_number ?? 1,
       question: ma.question ?? '',
       candidateResponse,
+      questionBandScore: ma.questionBandScore ?? ma.question_band_score ?? 0,
       // Ensure all four band levels exist with fallback content
       modelAnswerBand6: ma.modelAnswerBand6 ?? ma.model_answer_band6 ?? (candidateResponse || 'Model answer at Band 6 level.'),
       modelAnswerBand7: ma.modelAnswerBand7 ?? ma.model_answer_band7 ?? (candidateResponse || 'Model answer at Band 7 level.'),
@@ -1102,6 +1205,9 @@ function normalizeEvaluationResponse(data: any): any {
   return {
     overall_band: overallBand,
     overallBand: overallBand,
+    questionScores,
+    minimalResponseCount,
+    totalQuestionCount,
     fluency_coherence: normalizeCriterion('fluencyCoherence', 'fluency_coherence'),
     lexical_resource: {
       ...normalizeCriterion('lexicalResource', 'lexical_resource'),
