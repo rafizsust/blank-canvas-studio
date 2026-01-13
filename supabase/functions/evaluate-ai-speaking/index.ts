@@ -26,9 +26,10 @@ function stableSpeakingQuestionId(partNumber: 1 | 2 | 3, idx: number, text: stri
   return `p${partNumber}-q${idx + 1}-${stableHashHex(text)}`;
 }
 
-// Model priority: gemini-2.5-flash-preview-05-20 only (2.0-flash deprecated, 1.5-pro removed from API)
+// Model priority: gemini-2.5-flash as primary, gemini-2.0-flash as fallback
 const GEMINI_MODELS_FALLBACK_ORDER = [
-  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
 ];
 
 // Exponential backoff configuration

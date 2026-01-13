@@ -128,9 +128,10 @@ Speaker2: Hi, I'd like to register for a library card please.
 
 Generate the dialogue now:`;
 
-    // Models to try in order - using stable preview model
+    // Models to try in order - gemini-2.5-flash as primary, gemini-2.0-flash as fallback
     const dialogueModels = [
-      'gemini-2.5-flash-preview-05-20',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
     ];
 
     let dialogueScript: string | null = null;

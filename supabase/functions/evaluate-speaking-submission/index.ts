@@ -30,7 +30,8 @@ const corsHeaders = {
 
 // Model priority: 2.5 Flash only (2.0-flash deprecated, 1.5-pro removed from API)
 const GEMINI_MODELS = [
-  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
 ];
 
 // Custom error class for quota exhaustion / rate limiting

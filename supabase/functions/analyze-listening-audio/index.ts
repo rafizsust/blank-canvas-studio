@@ -34,10 +34,10 @@ interface GeminiTranscriptionResult {
   total_duration?: number;
 }
 
-// List of Gemini models in fallback order - using stable models only
+// List of Gemini models in fallback order - gemini-2.5-flash as primary, gemini-2.0-flash as fallback
 const GEMINI_MODELS_FALLBACK_ORDER = [
-  "gemini-2.5-flash-preview-05-20",
-  "gemini-2.5-pro-preview-05-06",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
 ] as const;
 
 async function decryptApiKey(encryptedValue: string, encryptionKey: string): Promise<string> {

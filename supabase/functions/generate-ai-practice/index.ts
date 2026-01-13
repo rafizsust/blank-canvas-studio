@@ -234,10 +234,10 @@ CRITICAL - VOICE-GENDER SYNCHRONIZATION:
   return constraint;
 }
 
-// Gemini models for IELTS text generation - using stable preview model
+// Gemini models for IELTS text generation - gemini-2.5-flash as primary, gemini-2.0-flash as fallback
 const GEMINI_MODELS = [
-  'gemini-2.5-flash-preview-05-20',  // Primary: stable flash preview for IELTS generation
-  'gemini-2.5-pro-preview-05-06',    // High quality fallback
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
 ];
 
 // Store last error for better error messages

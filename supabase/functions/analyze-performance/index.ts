@@ -34,7 +34,7 @@ async function decryptApiKey(encryptedValue: string, encryptionKey: string): Pro
   return decoder.decode(decryptedData);
 }
 
-const GEMINI_MODELS = ['gemini-2.5-flash-preview-05-20'];
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
 async function callGemini(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string | null> {
   for (const model of GEMINI_MODELS) {
