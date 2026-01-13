@@ -148,33 +148,65 @@ serve(async (req) => {
         console.error('[evaluate-speaking-async] Background error:', err);
         await supabaseService
           .from('speaking_evaluation_jobs')
-          .update({ 
-            status: 'failed', 
+          .update({
+            status: 'failed',
             last_error: err instanceof Error ? err.message : 'Unknown error',
           })
           .eq('id', job.id);
       }
     };
 
+    // Watchdog: if a job gets stuck in pending/processing (function instance shutdown, etc.),
+    // mark it as failed so the frontend stops polling forever.
+    const watchdog = async () => {
+      // 12 minutes: long enough for normal runs, short enough to avoid “infinite processing”.
+      const WATCHDOG_MS = 12 * 60 * 1000;
+      await new Promise((r) => setTimeout(r, WATCHDOG_MS));
+
+      const { data: current } = await supabaseService
+        .from('speaking_evaluation_jobs')
+        .select('status, updated_at')
+        .eq('id', job.id)
+        .maybeSingle();
+
+      if (!current) return;
+      if (current.status === 'completed' || current.status === 'failed') return;
+
+      console.warn('[evaluate-speaking-async] Watchdog firing: job still not terminal, marking failed', job.id);
+      await supabaseService
+        .from('speaking_evaluation_jobs')
+        .update({
+          status: 'failed',
+          last_error:
+            'Evaluation timed out in background processing. Please resubmit (we will reuse your uploaded audio).',
+        })
+        .eq('id', job.id);
+    };
+
     // Use EdgeRuntime.waitUntil for true async background processing
     if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
       console.log('[evaluate-speaking-async] Using EdgeRuntime.waitUntil');
       EdgeRuntime.waitUntil(processInBackground());
+      EdgeRuntime.waitUntil(watchdog());
     } else {
       console.log('[evaluate-speaking-async] EdgeRuntime not available, running async');
       processInBackground().catch(console.error);
+      watchdog().catch(console.error);
     }
 
     // Return 202 IMMEDIATELY - user gets instant feedback
-    return new Response(JSON.stringify({
-      success: true,
-      jobId: job.id,
-      status: 'pending',
-      message: 'Evaluation submitted. You will be notified when results are ready.',
-    }), {
-      status: 202,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        jobId: job.id,
+        status: 'pending',
+        message: 'Evaluation submitted. You will be notified when results are ready.',
+      }),
+      {
+        status: 202,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    );
 
   } catch (error: any) {
     console.error('[evaluate-speaking-async] Error:', error);

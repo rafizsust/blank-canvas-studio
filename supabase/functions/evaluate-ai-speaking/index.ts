@@ -34,12 +34,14 @@ const GEMINI_MODELS_FALLBACK_ORDER = [
 ];
 
 // Exponential backoff configuration
+// NOTE: We only retry transient transport errors. We DO NOT retry 429 quota/rate-limit responses,
+// because retrying the same key/model is pointless and wastes time.
 const RETRY_CONFIG = {
   maxRetries: 3,
   initialDelayMs: 1000,
   maxDelayMs: 8000,
   backoffMultiplier: 2,
-  retryableStatuses: [429, 503, 504], // Rate limit, Service Unavailable, Gateway Timeout
+  retryableStatuses: [503, 504], // Service Unavailable, Gateway Timeout
 };
 
 // DB-managed API key interface
@@ -134,15 +136,18 @@ function classifyGeminiError(status: number, errorText: string): GeminiErrorInfo
     };
   }
   
+  // 429 is typically either quota exhaustion or rate limiting.
+  // IMPORTANT: do NOT retry the same key/model on 429 — rotate keys/models instead.
   if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted')) {
     return {
       code: 'QUOTA_EXCEEDED',
-      userMessage: 'Gemini API quota exceeded. This may include usage from other platforms. Please wait a few minutes or check your Google AI Studio billing.',
+      userMessage:
+        'Gemini API quota/rate limit exceeded for this key. We\'ll switch keys automatically; please retry in a bit if it persists.',
       isQuota: true,
-      isRateLimit: false,
+      isRateLimit: true,
       isInvalidKey: false,
       isModelNotFound: false,
-      isRetryable: true, // Retry with backoff
+      isRetryable: false,
     };
   }
   

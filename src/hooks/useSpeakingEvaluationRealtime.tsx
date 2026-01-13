@@ -39,6 +39,7 @@ export function useSpeakingEvaluationRealtime({
   const [lastError, setLastError] = useState<string | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const hasCompletedRef = useRef(false);
+  const lastLoggedStatusRef = useRef<EvaluationJob['status'] | null>(null);
 
   // Keep callbacks stable so realtime subscription doesn't resubscribe every render
   const onCompleteRef = useRef(onComplete);
@@ -66,7 +67,10 @@ export function useSpeakingEvaluationRealtime({
 
   const handleJobUpdate = useCallback(
     (job: EvaluationJob) => {
-      console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
+      if (lastLoggedStatusRef.current !== job.status) {
+        console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
+        lastLoggedStatusRef.current = job.status;
+      }
 
       setJobStatus(job.status as EvaluationJob['status']);
       setRetryCount(job.retry_count || 0);
