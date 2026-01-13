@@ -21,10 +21,10 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Model priority: 2.0 Flash -> 2.5 Flash -> 1.5 Pro
+// Model priority: 2.5 Flash -> 2.0 Flash -> 1.5 Pro
 const GEMINI_MODELS = [
-  'gemini-2.0-flash',
   'gemini-2.5-flash',
+  'gemini-2.0-flash',
   'gemini-1.5-pro',
 ];
 
@@ -640,10 +640,17 @@ function buildPrompt(
     `For EACH question, you will assess what band the candidate achieved for THAT SPECIFIC response.`,
     `Then provide ONE model answer that is exactly ONE band higher - the NEXT achievable level.`,
     `- If candidate achieved Band 4-5 on a question → provide a Band 6 model answer`,
-    `- If candidate achieved Band 5-6 on a question → provide a Band 7 model answer`, 
+    `- If candidate achieved Band 5-6 on a question → provide a Band 7 model answer`,
     `- If candidate achieved Band 6-7 on a question → provide a Band 8 model answer`,
     `- If candidate achieved Band 8+ on a question → provide a Band 9 model answer`,
     `This is how a real mentor helps students improve - by showing them the next step, not overwhelming them with all levels.`,
+    ``,
+    `SCORING CONSISTENCY (CRITICAL):`,
+    `- You MUST evaluate every answer; do NOT award an overall band based on the best answer only.`,
+    `- If an answer is extremely short (e.g., "test", 1–3 words) treat it as a near non-response and penalize band for that question.`,
+    `- Set modelAnswers[].estimatedBand for EVERY segment and ensure it reflects the actual response quality.`,
+    `- Compute overall_band as a weighted average of estimatedBand across all segments (Part 2 weight 2.0, Part 3 weight 1.5, Part 1 weight 1.0), then round to nearest 0.5.`,
+    `- overall_band should be consistent with criteria bands (no big mismatch).`,
     ``,
     `Return this exact schema and key names:`,
     `{`,

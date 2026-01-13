@@ -315,10 +315,16 @@ export default function AISpeakingResults() {
 
     if (error) {
       console.error('Failed to load speaking results:', error);
+      setLoading(false);
       return;
     }
 
-    if (!data) return;
+    // If there's no result yet, stop the local loading spinner.
+    // The realtime job hook can still show the "Analyzing" state.
+    if (!data) {
+      setLoading(false);
+      return;
+    }
 
     const report = normalizeEvaluationReport(data.question_results);
 
@@ -401,8 +407,8 @@ export default function AISpeakingResults() {
     return 'bg-destructive/20 border-destructive/30';
   };
 
-  // Show async processing state
-  if ((loading && !result) || isWaiting) {
+  // Show async processing state (ONLY if we don't already have a result)
+  if ((loading && !result) || (!result && isWaiting)) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />

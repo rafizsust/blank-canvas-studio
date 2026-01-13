@@ -28,10 +28,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-gemini-api-key',
 };
 
-// Model priority: 2.0 Flash -> 2.5 Flash -> 1.5 Pro
+// Model priority: 2.5 Flash -> 2.0 Flash -> 1.5 Pro
 const GEMINI_MODELS = [
-  'gemini-2.0-flash',
   'gemini-2.5-flash',
+  'gemini-2.0-flash',
   'gemini-1.5-pro',
 ];
 
@@ -159,10 +159,17 @@ function buildPrompt(
     `For EACH question, you will assess what band the candidate achieved for THAT SPECIFIC response.`,
     `Then provide ONE model answer that is exactly ONE band higher - the NEXT achievable level.`,
     `- If candidate achieved Band 4-5 on a question → provide a Band 6 model answer`,
-    `- If candidate achieved Band 5-6 on a question → provide a Band 7 model answer`, 
+    `- If candidate achieved Band 5-6 on a question → provide a Band 7 model answer`,
     `- If candidate achieved Band 6-7 on a question → provide a Band 8 model answer`,
     `- If candidate achieved Band 8+ on a question → provide a Band 9 model answer`,
     `This is how a real mentor helps students improve - by showing them the next step, not overwhelming them with all levels.`,
+    ``,
+    `SCORING CONSISTENCY (CRITICAL):`,
+    `- You MUST evaluate every answer; do NOT award an overall band based on the best answer only.`,
+    `- If an answer is extremely short (e.g., "test", 1–3 words) treat it as a near non-response and penalize band for that question.`,
+    `- Set modelAnswers[].estimatedBand for EVERY segment and ensure it reflects the actual response quality.`,
+    `- Compute overall_band as a weighted average of estimatedBand across all segments (Part 2 weight 2.0, Part 3 weight 1.5, Part 1 weight 1.0), then round to nearest 0.5.`,
+    `- overall_band should be consistent with criteria bands (no big mismatch).`,
     ``,
     `Return this exact schema and key names:`,
     `{`,
@@ -224,11 +231,39 @@ function calculateBand(result: any): number {
     c.grammatical_range?.band,
     c.pronunciation?.band,
   ].filter(s => typeof s === 'number');
-  
+
   if (scores.length === 0) return 6.0;
-  
+
   const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
   return Math.round(avg * 2) / 2; // Round to nearest 0.5
+}
+
+function computeOverallBandFromQuestionBands(result: any): number | null {
+  const modelAnswers = Array.isArray(result?.modelAnswers) ? result.modelAnswers : [];
+  const bands = modelAnswers
+    .map((a: any) => ({
+      part: Number(a?.partNumber),
+      band: typeof a?.estimatedBand === 'number' ? a.estimatedBand : Number(a?.estimatedBand),
+    }))
+    .filter((x: any) => (x.part === 1 || x.part === 2 || x.part === 3) && Number.isFinite(x.band));
+
+  if (!bands.length) return null;
+
+  const weightForPart = (p: number) => (p === 2 ? 2.0 : p === 3 ? 1.5 : 1.0);
+  const weighted = bands.reduce(
+    (acc: { sum: number; w: number }, x: any) => {
+      const w = weightForPart(x.part);
+      return { sum: acc.sum + x.band * w, w: acc.w + w };
+    },
+    { sum: 0, w: 0 },
+  );
+
+  if (weighted.w <= 0) return null;
+
+  const avg = weighted.sum / weighted.w;
+  const rounded = Math.round(avg * 2) / 2;
+  const clamped = Math.min(9, Math.max(1, rounded));
+  return clamped;
 }
 
 serve(async (req) => {
@@ -603,7 +638,15 @@ serve(async (req) => {
     console.log(`[evaluate-speaking-submission] Successfully received response from model: ${usedModel}`);
 
     // Calculate band score
-    const overallBand = evaluationResult.overall_band || calculateBand(evaluationResult);
+    const derivedFromQuestions = computeOverallBandFromQuestionBands(evaluationResult);
+    const derivedFromCriteria = calculateBand(evaluationResult);
+    const overallBand =
+      typeof evaluationResult?.overall_band === 'number'
+        ? evaluationResult.overall_band
+        : derivedFromQuestions ?? derivedFromCriteria;
+
+    // Keep the payload internally consistent for the frontend.
+    evaluationResult.overall_band = overallBand;
 
     // Build public audio URLs
     const publicBase = r2PublicUrl.replace(/\/$/, '');
