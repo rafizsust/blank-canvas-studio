@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { GoogleAIFileManager } from "https://esm.sh/@google/generative-ai@0.21.0/server";
 import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0";
 import { 
   getActiveGeminiKeysForModel, 
@@ -10,14 +9,15 @@ import {
 import { getFromR2 } from "../_shared/r2Client.ts";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
+
 /**
  * SYNC Speaking Evaluation Edge Function for AI Practice Tests
  * 
- * This function uses Google's File API for atomic file upload + evaluation.
+ * This function uses inline base64 audio data for Gemini evaluation.
  * It waits for the complete evaluation and returns results directly.
  * 
  * Key Features:
- * - Atomic session: same API key for file upload AND generation
+ * - Uses inline data (no File API) for Deno compatibility
  * - Immediate key rotation on quota errors (no wasteful retries)
  * - Works with ai_practice_tests table (not speaking_submissions)
  * - Returns full evaluation result synchronously
@@ -43,8 +43,18 @@ class QuotaError extends Error {
   }
 }
 
-// Download audio from R2 and save to temp storage
-async function downloadAudioFromR2(filePath: string): Promise<{ tempPath: string; mimeType: string }> {
+// Convert Uint8Array to base64 string
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// Download audio from R2 and return as base64 data
+async function downloadAudioFromR2(filePath: string): Promise<{ base64Data: string; mimeType: string }> {
   console.log(`[evaluate-speaking-submission] Downloading from R2: ${filePath}`);
   
   const result = await getFromR2(filePath);
@@ -54,11 +64,12 @@ async function downloadAudioFromR2(filePath: string): Promise<{ tempPath: string
   
   const ext = filePath.split('.').pop()?.toLowerCase() || 'webm';
   const mimeType = ext === 'mp3' ? 'audio/mpeg' : 'audio/webm';
-  const tempPath = `/tmp/${crypto.randomUUID()}.${ext}`;
-  await Deno.writeFile(tempPath, result.bytes);
   
-  console.log(`[evaluate-speaking-submission] Saved to temp: ${tempPath} (${result.bytes.length} bytes)`);
-  return { tempPath, mimeType };
+  // Convert Uint8Array to base64 string for inline data
+  const base64Data = uint8ArrayToBase64(result.bytes);
+  
+  console.log(`[evaluate-speaking-submission] Downloaded: ${filePath} (${result.bytes.length} bytes)`);
+  return { base64Data, mimeType };
 }
 
 // Decrypt user API key
@@ -347,15 +358,15 @@ serve(async (req) => {
 
     console.log(`[evaluate-speaking-submission] Key queue: ${keyQueue.length} keys (${keyQueue.filter(k => k.isUserProvided).length} user, ${keyQueue.filter(k => !k.isUserProvided).length} admin)`);
 
-    // ============ DOWNLOAD FILES FROM R2 ============
-    const tempFiles: { key: string; tempPath: string; mimeType: string }[] = [];
+    // ============ DOWNLOAD FILES FROM R2 AS BASE64 ============
+    const audioFiles: { key: string; base64Data: string; mimeType: string }[] = [];
     
     try {
       for (const [audioKey, r2Path] of Object.entries(filePaths as Record<string, string>)) {
-        const { tempPath, mimeType } = await downloadAudioFromR2(r2Path);
-        tempFiles.push({ key: audioKey, tempPath, mimeType });
+        const { base64Data, mimeType } = await downloadAudioFromR2(r2Path);
+        audioFiles.push({ key: audioKey, base64Data, mimeType });
       }
-      console.log(`[evaluate-speaking-submission] Downloaded ${tempFiles.length} audio files to temp storage`);
+      console.log(`[evaluate-speaking-submission] Downloaded ${audioFiles.length} audio files as base64`);
     } catch (downloadError) {
       console.error('[evaluate-speaking-submission] Failed to download audio files:', downloadError);
       return new Response(JSON.stringify({ error: 'Failed to download audio files', code: 'R2_DOWNLOAD_ERROR' }), {
@@ -373,7 +384,7 @@ serve(async (req) => {
       orderedSegments,
     );
 
-    // ============ ATOMIC SESSION EXECUTION LOOP ============
+    // ============ EVALUATION LOOP WITH KEY ROTATION ============
     let evaluationResult: any = null;
     let usedModel: string | null = null;
     let usedKey: KeyCandidate | null = null;
@@ -384,27 +395,7 @@ serve(async (req) => {
       console.log(`[evaluate-speaking-submission] Trying key ${candidateKey.isUserProvided ? '(user)' : `(admin: ${candidateKey.keyId})`}`);
 
       try {
-        // STEP 1: Upload files to Google File API (ATOMIC with this key)
-        const fileManager = new GoogleAIFileManager(candidateKey.key);
-        const fileUris: { uri: string; mimeType: string; key: string }[] = [];
-
-        for (const tempFile of tempFiles) {
-          try {
-            const uploadResult = await fileManager.uploadFile(tempFile.tempPath, {
-              mimeType: tempFile.mimeType,
-              displayName: tempFile.key,
-            });
-            fileUris.push({ uri: uploadResult.file.uri, mimeType: tempFile.mimeType, key: tempFile.key });
-            console.log(`[evaluate-speaking-submission] Uploaded ${tempFile.key} to Google: ${uploadResult.file.uri}`);
-          } catch (uploadError: any) {
-            if (isQuotaExhaustedError(uploadError) || uploadError?.status === 429 || uploadError?.status === 403) {
-              throw new QuotaError(`Upload quota exhausted: ${uploadError.message}`);
-            }
-            throw uploadError;
-          }
-        }
-
-        // STEP 2: Generate content with the same key (ATOMIC)
+        // Generate content using inline base64 data (Deno-compatible)
         const genAI = new GoogleGenerativeAI(candidateKey.key);
         
         // Try each model in priority order
@@ -415,12 +406,17 @@ serve(async (req) => {
             console.log(`[evaluate-speaking-submission] Attempting evaluation with model: ${modelName}`);
             const model = genAI.getGenerativeModel({ model: modelName });
             
-            // Build content with file references
+            // Build content with inline base64 audio data
             const contentParts: any[] = [];
             
-            // Add file references
-            for (const fileRef of fileUris) {
-              contentParts.push({ fileData: { mimeType: fileRef.mimeType, fileUri: fileRef.uri } });
+            // Add audio files as inline data
+            for (const audioFile of audioFiles) {
+              contentParts.push({ 
+                inlineData: { 
+                  mimeType: audioFile.mimeType, 
+                  data: audioFile.base64Data 
+                } 
+              });
             }
             
             // Add prompt
@@ -474,15 +470,6 @@ serve(async (req) => {
       }
     }
 
-    // Cleanup temp files
-    for (const tempFile of tempFiles) {
-      try {
-        await Deno.remove(tempFile.tempPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-
     if (!evaluationResult || !usedModel || !usedKey) {
       return new Response(JSON.stringify({ 
         error: 'All API keys exhausted. Please try again later or add your own Gemini API key.', 
@@ -520,7 +507,7 @@ serve(async (req) => {
         module: 'speaking',
         score: Math.round(overallBand * 10),
         band_score: overallBand,
-        total_questions: tempFiles.length,
+        total_questions: audioFiles.length,
         time_spent_seconds: durations
           ? Math.round(Object.values(durations as Record<string, number>).reduce((a, b) => a + b, 0))
           : 60,
