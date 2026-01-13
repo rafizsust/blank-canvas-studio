@@ -11,6 +11,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ModelAnswersAccordion } from '@/components/speaking/ModelAnswersAccordion';
+import { useSpeakingEvaluationRealtime } from '@/hooks/useSpeakingEvaluationRealtime';
 import {
   Mic,
   RotateCcw,
@@ -28,6 +29,8 @@ import {
   AlertCircle,
   Lightbulb,
   Play,
+  Clock,
+  RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -222,74 +225,74 @@ export default function AISpeakingResults() {
   const [availableParts, setAvailableParts] = useState<number[]>([1, 2, 3]);
   const [expandedParts, setExpandedParts] = useState<Set<number>>(new Set([1, 2, 3]));
 
-  useEffect(() => {
-    if (!testId) {
-      navigate('/ai-practice');
+  // Realtime subscription for async evaluation
+  const {
+    jobStatus,
+    isWaiting,
+    isFailed,
+    retryCount,
+    lastError,
+    isSubscribed,
+  } = useSpeakingEvaluationRealtime({
+    testId: testId || '',
+    onComplete: () => {
+      // Reload results when job completes
+      loadResults();
+    },
+    onFailed: (error) => {
+      toast.error(`Evaluation failed: ${error}`);
+    },
+  });
+
+  const loadResults = async () => {
+    if (!testId || !user) return;
+
+    // Determine which parts this test actually contains (so we don't render empty Part 2/3 UI).
+    const { data: testRow } = await supabase
+      .from('ai_practice_tests')
+      .select('payload, question_type')
+      .eq('id', testId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const partsFromPayload = Array.isArray((testRow as any)?.payload?.speakingParts)
+      ? (testRow as any).payload.speakingParts
+          .map((p: any) => Number(p?.part_number))
+          .filter((n: any) => n === 1 || n === 2 || n === 3)
+      : [];
+
+    const partsFromType = (() => {
+      const qt = String((testRow as any)?.question_type || '');
+      if (qt === 'PART_1') return [1];
+      if (qt === 'PART_2') return [2];
+      if (qt === 'PART_3') return [3];
+      return [];
+    })();
+
+    const partsToShow = (partsFromPayload.length ? partsFromPayload : partsFromType).length
+      ? (partsFromPayload.length ? partsFromPayload : partsFromType)
+      : [1, 2, 3];
+
+    setAvailableParts(partsToShow);
+
+    // Try to find the result in ai_practice_results
+    const { data, error } = await supabase
+      .from('ai_practice_results')
+      .select('*')
+      .eq('test_id', testId)
+      .eq('user_id', user.id)
+      .eq('module', 'speaking')
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Failed to load speaking results:', error);
+      // Don't navigate away - let the realtime handle it
       return;
     }
 
-    if (authLoading) return;
-
-    if (!user) {
-      toast.error('Please sign in to view your results');
-      navigate('/ai-practice');
-      return;
-    }
-
-    const loadResults = async () => {
-      // Determine which parts this test actually contains (so we don't render empty Part 2/3 UI).
-      const { data: testRow } = await supabase
-        .from('ai_practice_tests')
-        .select('payload, question_type')
-        .eq('id', testId)
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      const partsFromPayload = Array.isArray((testRow as any)?.payload?.speakingParts)
-        ? (testRow as any).payload.speakingParts
-            .map((p: any) => Number(p?.part_number))
-            .filter((n: any) => n === 1 || n === 2 || n === 3)
-        : [];
-
-      const partsFromType = (() => {
-        const qt = String((testRow as any)?.question_type || '');
-        if (qt === 'PART_1') return [1];
-        if (qt === 'PART_2') return [2];
-        if (qt === 'PART_3') return [3];
-        return [];
-      })();
-
-      const partsToShow = (partsFromPayload.length ? partsFromPayload : partsFromType).length
-        ? (partsFromPayload.length ? partsFromPayload : partsFromType)
-        : [1, 2, 3];
-
-      setAvailableParts(partsToShow);
-
-      // Try to find the result in ai_practice_results
-      const { data, error } = await supabase
-        .from('ai_practice_results')
-        .select('*')
-        .eq('test_id', testId)
-        .eq('user_id', user.id)
-        .eq('module', 'speaking')
-        .order('completed_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Failed to load speaking results:', error);
-        toast.error('Failed to load results');
-        navigate('/ai-practice');
-        return;
-      }
-
-      if (!data) {
-        // Results might still be processing
-        toast.info('Results are still being processed. Please wait...');
-        setTimeout(loadResults, 3000);
-        return;
-      }
-
+    if (data) {
       const report = normalizeEvaluationReport(data.question_results);
       const { audioUrls, transcriptsByPart, transcriptsByQuestion } = normalizeSpeakingAnswers(data.answers);
 
@@ -306,7 +309,22 @@ export default function AISpeakingResults() {
         created_at: data.completed_at,
       });
       setLoading(false);
-    };
+    }
+  };
+
+  useEffect(() => {
+    if (!testId) {
+      navigate('/ai-practice');
+      return;
+    }
+
+    if (authLoading) return;
+
+    if (!user) {
+      toast.error('Please sign in to view your results');
+      navigate('/ai-practice');
+      return;
+    }
 
     loadResults();
   }, [testId, navigate, user, authLoading]);
@@ -335,7 +353,87 @@ export default function AISpeakingResults() {
     return 'bg-destructive/20 border-destructive/30';
   };
 
-  if (loading || !result) {
+  // Show async processing state
+  if ((loading && !result) || isWaiting) {
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <Navbar />
+        <main className="flex-1 flex items-center justify-center p-4">
+          <Card className="max-w-md w-full">
+            <CardContent className="py-8 text-center">
+              <div className="relative mx-auto w-16 h-16 mb-6">
+                <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
+                <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin"></div>
+                <Mic className="absolute inset-0 m-auto w-6 h-6 text-primary" />
+              </div>
+              
+              <h2 className="text-xl font-bold mb-2">
+                {jobStatus === 'processing' ? 'Analyzing Your Speech...' : 'Preparing Evaluation...'}
+              </h2>
+              
+              <p className="text-muted-foreground mb-4">
+                {jobStatus === 'processing' 
+                  ? 'AI is evaluating your pronunciation, fluency, and grammar'
+                  : 'Your recordings have been submitted successfully'
+                }
+              </p>
+
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground mb-4">
+                <Clock className="w-4 h-4" />
+                <span>This typically takes 30-60 seconds</span>
+              </div>
+
+              {retryCount > 0 && (
+                <div className="flex items-center justify-center gap-2 text-sm text-warning">
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Retry attempt {retryCount}...</span>
+                </div>
+              )}
+
+              {isSubscribed && (
+                <Badge variant="outline" className="mt-4">
+                  <span className="w-2 h-2 rounded-full bg-success animate-pulse mr-2"></span>
+                  Live updates enabled
+                </Badge>
+              )}
+            </CardContent>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  // Show failed state
+  if (isFailed) {
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <Navbar />
+        <main className="flex-1 flex items-center justify-center p-4">
+          <Card className="max-w-md w-full">
+            <CardContent className="py-8 text-center">
+              <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+              <h2 className="text-xl font-bold mb-2">Evaluation Failed</h2>
+              <p className="text-muted-foreground mb-4">
+                {lastError || 'We couldn\'t process your evaluation. Please try again.'}
+              </p>
+              <div className="flex gap-3 justify-center">
+                <Button variant="outline" onClick={() => navigate('/ai-practice')}>
+                  <Home className="w-4 h-4 mr-2" />
+                  Go Back
+                </Button>
+                <Button onClick={() => window.location.reload()}>
+                  <RotateCcw className="w-4 h-4 mr-2" />
+                  Retry
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  if (!result) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />

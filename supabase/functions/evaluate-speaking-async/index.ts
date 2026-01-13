@@ -443,14 +443,15 @@ function parseJson(text: string): any {
 function calculateBand(result: any): number {
   const c = result.criteria;
   if (!c) return 6.0;
-  const scores = [c.fluency_coherence?.band, c.lexical_resource?.band, c.grammatical_range?.band, c.pronunciation?.band].filter(Boolean);
-  return scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 2) / 2 : 6.0;
-}
-    criteria.pronunciation?.band,
+  const scores = [
+    c.fluency_coherence?.band,
+    c.lexical_resource?.band,
+    c.grammatical_range?.band,
+    c.pronunciation?.band,
   ].filter(s => typeof s === 'number');
   
   if (scores.length === 0) return 6.0;
   
-  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
   return Math.round(avg * 2) / 2; // Round to nearest 0.5
 }
