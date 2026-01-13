@@ -708,39 +708,42 @@ export default function AISpeakingResults() {
                       estimatedBand?: number;
                     }>> = new Map();
 
-                    // Parse audio URLs to determine part numbers (handles both formats)
+                    // Parse audio URLs to determine part numbers and match with transcripts/model answers
                     allAudioUrls.forEach(([key, url]) => {
                       // Match patterns like "part1-qp1-q1-xxx" or "part1-qxxx"
                       const partMatch = key.match(/^part(\d)/);
                       const partNum = partMatch ? Number(partMatch[1]) : 1;
                       
-                      // Find matching model answer by key similarity or index
-                      const matchingModel = modelAnswers.find(m => 
-                        key.includes(`q${m.questionNumber}`) || 
-                        m.segment_key === key ||
-                        key.includes(String(m.questionNumber))
-                      );
+                      // STRICT MATCHING: Find model answer where segment_key exactly matches the audio key
+                      const matchingModel = modelAnswers.find(m => m.segment_key === key);
 
-                      // Also try to find transcript from transcripts_by_question
+                      // Initialize with model answer data if found
                       let transcript = matchingModel?.candidateResponse || '';
-                      let questionText = matchingModel?.question || `Question`;
+                      let questionText = matchingModel?.question || '';
                       let questionNumber = matchingModel?.questionNumber || 0;
                       let estimatedBand = matchingModel?.estimatedBand;
 
-                      // Check all keys in transcripts_by_question for matching data
+                      // STRICT MATCHING: Check transcripts_by_question for exact segment_key match
                       const tbq = result.candidate_transcripts.by_question;
                       if (tbq) {
                         for (const [, entries] of Object.entries(tbq)) {
                           if (Array.isArray(entries)) {
                             for (const entry of entries) {
-                              if (entry.segment_key && key.includes(entry.segment_key.replace('part1-q', 'part1-qp1-q'))) {
+                              // Exact match on segment_key
+                              if (entry.segment_key === key) {
                                 transcript = transcript || entry.transcript;
-                                questionText = entry.question_text || questionText;
+                                questionText = questionText || entry.question_text || '';
                                 questionNumber = questionNumber || entry.question_number;
                               }
                             }
                           }
                         }
+                      }
+
+                      // Fallback: extract question number from key pattern if not found
+                      if (!questionNumber) {
+                        const qMatch = key.match(/q(\d+)/);
+                        questionNumber = qMatch ? Number(qMatch[1]) : questionsByPart.get(partNum)?.length || 0 + 1;
                       }
 
                       if (!questionsByPart.has(partNum)) {
@@ -750,8 +753,8 @@ export default function AISpeakingResults() {
                       questionsByPart.get(partNum)!.push({
                         key,
                         audioUrl: url,
-                        questionNumber: questionNumber || questionsByPart.get(partNum)!.length + 1,
-                        questionText,
+                        questionNumber,
+                        questionText: questionText || `Question ${questionNumber}`,
                         transcript,
                         estimatedBand,
                       });

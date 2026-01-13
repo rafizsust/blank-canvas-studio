@@ -29,9 +29,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-gemini-api-key',
 };
 
-// Model priority: Use exp model for better limits, then fall back
+// Model priority: gemini-2.5-flash first (best quality), then 2.0-flash fallback
 const GEMINI_MODELS = [
-  'gemini-2.0-flash-exp',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
 ];

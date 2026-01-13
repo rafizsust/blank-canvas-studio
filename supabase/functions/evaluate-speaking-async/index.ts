@@ -524,6 +524,19 @@ async function runEvaluation(
     throw new Error('Evaluation failed: all models/keys exhausted');
   }
 
+  // Validate model answer lengths - Part 2 should be at least 100 words
+  const modelAnswers = result.modelAnswers || [];
+  for (const answer of modelAnswers) {
+    if (answer.partNumber === 2 && answer.modelAnswer) {
+      const wordCount = String(answer.modelAnswer).split(/\s+/).filter(Boolean).length;
+      if (wordCount < 100) {
+        console.warn(`[runEvaluation] Part 2 model answer too short (${wordCount} words), but proceeding anyway`);
+        // Note: We log but don't reject - the prompt already specifies length requirements
+        // A future enhancement could retry with a different model if too short
+      }
+    }
+  }
+
   // Calculate band score
   const overallBand = result.overall_band || calculateBand(result);
 
