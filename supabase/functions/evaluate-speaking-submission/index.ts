@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0";
+import { GoogleAIFileManager } from "https://esm.sh/@google/generative-ai@0.21.0/server";
 import { 
   getActiveGeminiKeysForModel, 
   markKeyQuotaExhausted,
@@ -13,13 +14,13 @@ import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 /**
  * SYNC Speaking Evaluation Edge Function for AI Practice Tests
  * 
- * This function uses inline base64 audio data for Gemini evaluation.
- * It waits for the complete evaluation and returns results directly.
+ * Uses Google File API for audio uploads to avoid base64 token bloat.
+ * Audio files are uploaded to Google's servers, then URIs are passed to Gemini.
  * 
  * Key Features:
- * - Uses inline data (no File API) for Deno compatibility
- * - Immediate key rotation on quota errors (no wasteful retries)
- * - Works with ai_practice_tests table (not speaking_submissions)
+ * - Google File API for audio (avoids 429 quota issues from base64)
+ * - Immediate key rotation on quota errors
+ * - Works with ai_practice_tests table
  * - Returns full evaluation result synchronously
  */
 
@@ -28,8 +29,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-gemini-api-key',
 };
 
-// Model priority: 2.5 Flash only (2.0-flash deprecated, 1.5-pro removed from API)
+// Model priority: Use exp model for better limits, then fall back
 const GEMINI_MODELS = [
+  'gemini-2.0-flash-exp',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
 ];
@@ -75,35 +77,6 @@ function isPermanentQuotaExhausted(err: any): boolean {
   return false;
 }
 
-// Convert Uint8Array to base64 string
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-// Download audio from R2 and return as base64 data
-async function downloadAudioFromR2(filePath: string): Promise<{ base64Data: string; mimeType: string }> {
-  console.log(`[evaluate-speaking-submission] Downloading from R2: ${filePath}`);
-  
-  const result = await getFromR2(filePath);
-  if (!result.success || !result.bytes) {
-    throw new Error(`Failed to download audio from R2: ${result.error}`);
-  }
-  
-  const ext = filePath.split('.').pop()?.toLowerCase() || 'webm';
-  const mimeType = ext === 'mp3' ? 'audio/mpeg' : 'audio/webm';
-  
-  // Convert Uint8Array to base64 string for inline data
-  const base64Data = uint8ArrayToBase64(result.bytes);
-  
-  console.log(`[evaluate-speaking-submission] Downloaded: ${filePath} (${result.bytes.length} bytes)`);
-  return { base64Data, mimeType };
-}
-
 // Decrypt user API key
 async function decryptKey(encrypted: string, appKey: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -113,6 +86,41 @@ async function decryptKey(encrypted: string, appKey: string): Promise<string> {
   const bytes = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12) }, cryptoKey, bytes.slice(12));
   return decoder.decode(decrypted);
+}
+
+// Upload audio to Google File API and return file URI
+async function uploadToGoogleFileAPI(
+  fileManager: GoogleAIFileManager,
+  audioBytes: Uint8Array,
+  fileName: string,
+  mimeType: string
+): Promise<{ uri: string; mimeType: string }> {
+  // Write to temp file (required by File API)
+  const tempPath = `/tmp/${fileName}`;
+  await Deno.writeFile(tempPath, audioBytes);
+  
+  try {
+    console.log(`[evaluate-speaking-submission] Uploading ${fileName} to Google File API...`);
+    
+    const uploadResult = await fileManager.uploadFile(tempPath, {
+      mimeType,
+      displayName: fileName,
+    });
+    
+    console.log(`[evaluate-speaking-submission] Uploaded ${fileName}: ${uploadResult.file.uri}`);
+    
+    return {
+      uri: uploadResult.file.uri,
+      mimeType: uploadResult.file.mimeType,
+    };
+  } finally {
+    // Clean up temp file
+    try {
+      await Deno.remove(tempPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }
 
 // Build evaluation prompt with expert examiner analysis
@@ -523,15 +531,24 @@ serve(async (req) => {
 
     console.log(`[evaluate-speaking-submission] Key queue: ${keyQueue.length} keys (${keyQueue.filter(k => k.isUserProvided).length} user, ${keyQueue.filter(k => !k.isUserProvided).length} admin)`);
 
-    // ============ DOWNLOAD FILES FROM R2 AS BASE64 ============
-    const audioFiles: { key: string; base64Data: string; mimeType: string }[] = [];
+    // ============ DOWNLOAD FILES FROM R2 ============
+    const audioFiles: { key: string; bytes: Uint8Array; mimeType: string }[] = [];
     
     try {
       for (const [audioKey, r2Path] of Object.entries(filePaths as Record<string, string>)) {
-        const { base64Data, mimeType } = await downloadAudioFromR2(r2Path);
-        audioFiles.push({ key: audioKey, base64Data, mimeType });
+        console.log(`[evaluate-speaking-submission] Downloading from R2: ${r2Path}`);
+        const result = await getFromR2(r2Path);
+        if (!result.success || !result.bytes) {
+          throw new Error(`Failed to download audio from R2: ${result.error}`);
+        }
+        
+        const ext = r2Path.split('.').pop()?.toLowerCase() || 'webm';
+        const mimeType = ext === 'mp3' ? 'audio/mpeg' : 'audio/webm';
+        
+        audioFiles.push({ key: audioKey, bytes: result.bytes, mimeType });
+        console.log(`[evaluate-speaking-submission] Downloaded: ${r2Path} (${result.bytes.length} bytes)`);
       }
-      console.log(`[evaluate-speaking-submission] Downloaded ${audioFiles.length} audio files as base64`);
+      console.log(`[evaluate-speaking-submission] Downloaded ${audioFiles.length} audio files from R2`);
     } catch (downloadError) {
       console.error('[evaluate-speaking-submission] Failed to download audio files:', downloadError);
       return new Response(JSON.stringify({ error: 'Failed to download audio files', code: 'R2_DOWNLOAD_ERROR' }), {
@@ -564,27 +581,57 @@ serve(async (req) => {
       console.log(`[evaluate-speaking-submission] Trying key ${candidateKey.isUserProvided ? '(user)' : `(admin: ${candidateKey.keyId})`}`);
 
       try {
-        // Generate content using inline base64 data (Deno-compatible)
+        // Initialize File Manager and GenAI with this key
+        const fileManager = new GoogleAIFileManager(candidateKey.key);
         const genAI = new GoogleGenerativeAI(candidateKey.key);
+
+        // ============ UPLOAD FILES TO GOOGLE FILE API ============
+        const fileUris: Array<{ fileData: { mimeType: string; fileUri: string } }> = [];
+        
+        console.log(`[evaluate-speaking-submission] Uploading ${audioFiles.length} files to Google File API...`);
+        
+        for (const audioFile of audioFiles) {
+          try {
+            const uploadResult = await uploadToGoogleFileAPI(
+              fileManager,
+              audioFile.bytes,
+              `${audioFile.key}.webm`,
+              audioFile.mimeType
+            );
+            
+            fileUris.push({
+              fileData: {
+                mimeType: uploadResult.mimeType,
+                fileUri: uploadResult.uri,
+              }
+            });
+          } catch (uploadError: any) {
+            console.error(`[evaluate-speaking-submission] Failed to upload ${audioFile.key}:`, uploadError?.message);
+            throw uploadError;
+          }
+        }
+        
+        console.log(`[evaluate-speaking-submission] Successfully uploaded ${fileUris.length} files to Google File API`);
 
         // Try each model in priority order
         for (const modelName of GEMINI_MODELS) {
           if (evaluationResult) break;
 
           console.log(`[evaluate-speaking-submission] Attempting evaluation with model: ${modelName}`);
-          const model = genAI.getGenerativeModel({ model: modelName });
+          
+          const model = genAI.getGenerativeModel({ 
+            model: modelName,
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 65000, // Higher limit for complete responses
+            },
+          });
 
-          // Build content with inline base64 audio data (built once per model)
-          const contentParts: any[] = [];
-          for (const audioFile of audioFiles) {
-            contentParts.push({
-              inlineData: {
-                mimeType: audioFile.mimeType,
-                data: audioFile.base64Data,
-              },
-            });
-          }
-          contentParts.push({ text: prompt });
+          // Build content with file URIs (NOT base64)
+          const contentParts: any[] = [
+            ...fileUris, // File URIs first
+            { text: prompt } // Then the prompt
+          ];
 
           // Track quota/rate-limit errors per-model so we can fall back to the next model
           // before burning through the entire key pool.
@@ -595,10 +642,6 @@ serve(async (req) => {
             try {
               const result = await model.generateContent({
                 contents: [{ role: 'user', parts: contentParts }],
-                generationConfig: {
-                  temperature: 0.3,
-                  maxOutputTokens: 8000,
-                },
               });
 
               const responseText = result.response?.text();
