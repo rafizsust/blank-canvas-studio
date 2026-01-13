@@ -61,6 +61,7 @@ interface ModelAnswer {
   question: string;
   questionNumber?: number;
   candidateResponse?: string;
+  segment_key?: string;
   // New format: single targeted model answer
   estimatedBand?: number;
   targetBand?: number;
@@ -77,6 +78,7 @@ interface TranscriptEntry {
   question_number: number;
   question_text: string;
   transcript: string;
+  segment_key?: string;
 }
 
 interface EvaluationReport {
@@ -202,6 +204,22 @@ function normalizeEvaluationReport(raw: any): EvaluationReport {
 
   const modelAnswers = asArray<ModelAnswer>(raw?.modelAnswers ?? raw?.model_answers);
 
+  // Handle strengths from multiple possible sources
+  const strengthsToMaintain = (() => {
+    const direct = asArray<string>(raw?.strengths_to_maintain ?? raw?.keyStrengths);
+    if (direct.length) return direct;
+    // Also try extracting from criteria strengths as fallback
+    const criteriaStrengths: string[] = [];
+    const c = raw?.criteria;
+    if (c) {
+      if (c.fluency_coherence?.strengths) criteriaStrengths.push(...asArray<string>(c.fluency_coherence.strengths).slice(0, 1));
+      if (c.lexical_resource?.strengths) criteriaStrengths.push(...asArray<string>(c.lexical_resource.strengths).slice(0, 1));
+      if (c.grammatical_range?.strengths) criteriaStrengths.push(...asArray<string>(c.grammatical_range.strengths).slice(0, 1));
+      if (c.pronunciation?.strengths) criteriaStrengths.push(...asArray<string>(c.pronunciation.strengths).slice(0, 1));
+    }
+    return criteriaStrengths.length ? criteriaStrengths : direct;
+  })();
+
   return {
     overall_band: overallBand,
     fluency_coherence: normalizeCriterion(raw?.fluency_coherence ?? raw?.fluencyCoherence, 'fluency_coherence'),
@@ -211,7 +229,7 @@ function normalizeEvaluationReport(raw: any): EvaluationReport {
     lexical_upgrades: lexicalUpgrades,
     part_analysis: partAnalysis,
     improvement_priorities: asArray<string>(raw?.improvement_priorities ?? raw?.priorityImprovements ?? raw?.improvements),
-    strengths_to_maintain: asArray<string>(raw?.strengths_to_maintain ?? raw?.keyStrengths),
+    strengths_to_maintain: strengthsToMaintain,
     examiner_notes: String(raw?.examiner_notes ?? raw?.summary ?? ''),
     modelAnswers,
   };
@@ -673,151 +691,142 @@ export default function AISpeakingResults() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {availableParts.map((part) => {
-                    const byQuestion = result.candidate_transcripts.by_question?.[part];
-                    const byPart = result.candidate_transcripts.by_part?.[part];
+                  {(() => {
+                    // Build a unified list of all questions with audio and transcripts
+                    const allAudioUrls = Object.entries(result.audio_urls);
+                    const modelAnswers = report.modelAnswers || [];
+                    
+                    // Group by part number based on segment key patterns
+                    const questionsByPart: Map<number, Array<{
+                      key: string;
+                      audioUrl: string;
+                      questionNumber: number;
+                      questionText: string;
+                      transcript: string;
+                      estimatedBand?: number;
+                    }>> = new Map();
 
-                    // Find audio URLs for this part (they follow pattern "partX-qXXX")
-                    const partAudioUrls = Object.entries(result.audio_urls).filter(
-                      ([key]) => key.startsWith(`part${part}-`)
-                    );
+                    // Parse audio URLs to determine part numbers (handles both formats)
+                    allAudioUrls.forEach(([key, url]) => {
+                      // Match patterns like "part1-qp1-q1-xxx" or "part1-qxxx"
+                      const partMatch = key.match(/^part(\d)/);
+                      const partNum = partMatch ? Number(partMatch[1]) : 1;
+                      
+                      // Find matching model answer by key similarity or index
+                      const matchingModel = modelAnswers.find(m => 
+                        key.includes(`q${m.questionNumber}`) || 
+                        m.segment_key === key ||
+                        key.includes(String(m.questionNumber))
+                      );
 
-                    // Fallback: extract transcripts from modelAnswers if dedicated transcript data is missing
-                    const modelAnswersForPart = report.modelAnswers?.filter(m => m.partNumber === part) || [];
-                    const hasModelTranscripts = modelAnswersForPart.some(m => m.candidateResponse);
+                      // Also try to find transcript from transcripts_by_question
+                      let transcript = matchingModel?.candidateResponse || '';
+                      let questionText = matchingModel?.question || `Question`;
+                      let questionNumber = matchingModel?.questionNumber || 0;
+                      let estimatedBand = matchingModel?.estimatedBand;
 
-                    // Determine if we have any transcript data for this part
-                    const hasQuestionTranscripts = Array.isArray(byQuestion) && byQuestion.length > 0;
+                      // Check all keys in transcripts_by_question for matching data
+                      const tbq = result.candidate_transcripts.by_question;
+                      if (tbq) {
+                        for (const [, entries] of Object.entries(tbq)) {
+                          if (Array.isArray(entries)) {
+                            for (const entry of entries) {
+                              if (entry.segment_key && key.includes(entry.segment_key.replace('part1-q', 'part1-qp1-q'))) {
+                                transcript = transcript || entry.transcript;
+                                questionText = entry.question_text || questionText;
+                                questionNumber = questionNumber || entry.question_number;
+                              }
+                            }
+                          }
+                        }
+                      }
 
-                    return (
-                      <div key={part} className="border rounded-lg p-4 space-y-4">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">Part {part}</Badge>
-                          {partAudioUrls.length > 0 && (
+                      if (!questionsByPart.has(partNum)) {
+                        questionsByPart.set(partNum, []);
+                      }
+                      
+                      questionsByPart.get(partNum)!.push({
+                        key,
+                        audioUrl: url,
+                        questionNumber: questionNumber || questionsByPart.get(partNum)!.length + 1,
+                        questionText,
+                        transcript,
+                        estimatedBand,
+                      });
+                    });
+
+                    // Sort questions within each part
+                    questionsByPart.forEach((questions) => {
+                      questions.sort((a, b) => a.questionNumber - b.questionNumber);
+                    });
+
+                    // Render parts
+                    const sortedParts = [...questionsByPart.keys()].sort();
+                    
+                    if (sortedParts.length === 0) {
+                      return (
+                        <p className="text-muted-foreground text-center py-8">
+                          No recordings available for this test.
+                        </p>
+                      );
+                    }
+
+                    return sortedParts.map((partNum) => {
+                      const questions = questionsByPart.get(partNum) || [];
+                      
+                      return (
+                        <div key={partNum} className="border rounded-lg p-4 space-y-4">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">Part {partNum}</Badge>
                             <Badge variant="secondary" className="text-xs flex items-center gap-1">
                               <Volume2 className="w-3 h-3" />
-                              {partAudioUrls.length} recording{partAudioUrls.length > 1 ? 's' : ''}
+                              {questions.length} recording{questions.length > 1 ? 's' : ''}
                             </Badge>
-                          )}
-                        </div>
-
-                        {hasQuestionTranscripts ? (
-                          // Use per-question transcript data
-                          <div className="space-y-4">
-                            {byQuestion!.map((q, i) => {
-                              const audioUrl = partAudioUrls[i]?.[1] || null;
-
-                              return (
-                                <div key={`${q.question_number}-${i}`} className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0">
-                                  <p className="text-sm font-medium">Q{q.question_number}: {q.question_text}</p>
-                                  
-                                  {audioUrl && (
-                                    <div className="bg-muted/50 rounded-lg p-2">
-                                      <audio
-                                        controls
-                                        src={audioUrl}
-                                        className="w-full h-10"
-                                        preload="auto"
-                                        crossOrigin="anonymous"
-                                      >
-                                        Your browser does not support audio playback.
-                                      </audio>
-                                    </div>
-                                  )}
-                                  
-                                  <div className="pl-3 border-l-2 border-muted">
-                                    <p className="text-xs text-muted-foreground mb-1">Transcript:</p>
-                                    <p className="text-sm text-muted-foreground whitespace-pre-line">
-                                      {q.transcript || (
-                                        <span className="italic text-muted-foreground/70">
-                                          (Transcript unavailable - listen to the recording above)
-                                        </span>
-                                      )}
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            })}
                           </div>
-                        ) : hasModelTranscripts ? (
-                          // Fallback: use transcripts from Model Answers section
-                          <div className="space-y-4">
-                            {modelAnswersForPart.map((model, i) => {
-                              const audioUrl = partAudioUrls[i]?.[1] || null;
 
-                              return (
-                                <div key={`model-${i}`} className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0">
-                                  <p className="text-sm font-medium">{model.question}</p>
-                                  
-                                  {audioUrl && (
-                                    <div className="bg-muted/50 rounded-lg p-2">
-                                      <audio
-                                        controls
-                                        src={audioUrl}
-                                        className="w-full h-10"
-                                        preload="auto"
-                                        crossOrigin="anonymous"
-                                      >
-                                        Your browser does not support audio playback.
-                                      </audio>
-                                    </div>
+                          <div className="space-y-4">
+                            {questions.map((q) => (
+                              <div key={q.key} className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-medium flex-1">
+                                    Q{q.questionNumber}: {q.questionText}
+                                  </p>
+                                  {q.estimatedBand && (
+                                    <Badge variant="outline" className="text-xs">
+                                      ~Band {q.estimatedBand.toFixed(1)}
+                                    </Badge>
                                   )}
-                                  
-                                  <div className="pl-3 border-l-2 border-muted">
-                                    <p className="text-xs text-muted-foreground mb-1">Transcript:</p>
-                                    <p className="text-sm text-muted-foreground whitespace-pre-line">
-                                      {model.candidateResponse || (
-                                        <span className="italic text-muted-foreground/70">
-                                          (Transcript unavailable - listen to the recording above)
-                                        </span>
-                                      )}
-                                    </p>
-                                  </div>
                                 </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          // Final fallback: show part-level transcript or audio only
-                          <div className="space-y-2">
-                            {partAudioUrls.length > 0 && (
-                              <div className="space-y-2">
-                                {partAudioUrls.map(([key, url], i) => (
-                                  <div key={key} className="bg-muted/50 rounded-lg p-2">
-                                    <p className="text-xs text-muted-foreground mb-1">Recording {i + 1}</p>
-                                    <audio
-                                      controls
-                                      src={url}
-                                      className="w-full h-10"
-                                      preload="auto"
-                                      crossOrigin="anonymous"
-                                    >
-                                      Your browser does not support audio playback.
-                                    </audio>
-                                  </div>
-                                ))}
+                                
+                                <div className="bg-muted/50 rounded-lg p-2">
+                                  <audio
+                                    controls
+                                    src={q.audioUrl}
+                                    className="w-full h-10"
+                                    preload="auto"
+                                    crossOrigin="anonymous"
+                                  >
+                                    Your browser does not support audio playback.
+                                  </audio>
+                                </div>
+                                
+                                <div className="pl-3 border-l-2 border-muted">
+                                  <p className="text-xs text-muted-foreground mb-1">Transcript:</p>
+                                  <p className="text-sm text-muted-foreground whitespace-pre-line">
+                                    {q.transcript || (
+                                      <span className="italic text-muted-foreground/70">
+                                        (Transcript unavailable - listen to the recording above)
+                                      </span>
+                                    )}
+                                  </p>
+                                </div>
                               </div>
-                            )}
-                            
-                            <div className="pl-3 border-l-2 border-muted">
-                              <p className="text-xs text-muted-foreground mb-1">Transcript:</p>
-                              <p className="text-sm text-muted-foreground whitespace-pre-line">
-                                {byPart || (
-                                  partAudioUrls.length > 0 ? (
-                                    <span className="italic text-muted-foreground/70">
-                                      (Transcript unavailable - listen to the recordings above)
-                                    </span>
-                                  ) : (
-                                    '(No response recorded)'
-                                  )
-                                )}
-                              </p>
-                            </div>
+                            ))}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                        </div>
+                      );
+                    });
+                  })()}
                   
                   {/* Info note about transcript availability */}
                   <p className="text-xs text-muted-foreground text-center pt-2 border-t">
