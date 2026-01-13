@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
@@ -24,12 +24,20 @@ import {
   RotateCcw,
   AlertCircle,
   RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { setCurrentTest, GeneratedTest } from '@/types/aiPractice';
 import { hasFailedSubmission } from '@/hooks/useTestSubmission';
 import type { Tables } from '@/integrations/supabase/types';
+
+interface PendingEvaluation {
+  id: string;
+  test_id: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  created_at: string;
+}
 
 type AIPracticeTest = Tables<'ai_practice_tests'>;
 type AIPracticeResult = Tables<'ai_practice_results'>;
@@ -56,14 +64,106 @@ export default function AIPracticeHistory() {
   const [loading, setLoading] = useState(true);
   const [activeModule, setActiveModule] = useState<string>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingEvaluations, setPendingEvaluations] = useState<Map<string, PendingEvaluation>>(new Map());
 
+  // Load tests on mount
   useEffect(() => {
     if (!authLoading && user) {
       loadTests();
+      loadPendingEvaluations();
     } else if (!authLoading && !user) {
       setLoading(false);
     }
   }, [user, authLoading]);
+
+  // Realtime subscription for speaking evaluation jobs
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('speaking-eval-history')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'speaking_evaluation_jobs',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload: any) => {
+          const job = payload.new as PendingEvaluation;
+          if (!job) return;
+
+          console.log('[AIPracticeHistory] Evaluation job update:', job.status, job.test_id);
+
+          if (job.status === 'completed') {
+            // Remove from pending and reload results
+            setPendingEvaluations(prev => {
+              const updated = new Map(prev);
+              updated.delete(job.test_id);
+              return updated;
+            });
+
+            // Show toast notification
+            toast({
+              title: '🎉 Speaking Evaluation Ready!',
+              description: 'Your speaking test results are now available.',
+            });
+
+            // Reload results to show the new completion
+            loadTests();
+          } else if (job.status === 'failed') {
+            setPendingEvaluations(prev => {
+              const updated = new Map(prev);
+              updated.delete(job.test_id);
+              return updated;
+            });
+
+            toast({
+              title: 'Evaluation Failed',
+              description: 'There was an issue evaluating your speaking test.',
+              variant: 'destructive',
+            });
+          } else if (job.status === 'pending' || job.status === 'processing') {
+            setPendingEvaluations(prev => {
+              const updated = new Map(prev);
+              updated.set(job.test_id, job);
+              return updated;
+            });
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('[AIPracticeHistory] Realtime subscription:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, toast]);
+
+  // Load pending evaluations on mount
+  const loadPendingEvaluations = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      const { data: jobs } = await supabase
+        .from('speaking_evaluation_jobs')
+        .select('id, test_id, status, created_at')
+        .eq('user_id', user.id)
+        .in('status', ['pending', 'processing']);
+
+      if (jobs && jobs.length > 0) {
+        const pendingMap = new Map<string, PendingEvaluation>();
+        jobs.forEach(job => {
+          pendingMap.set(job.test_id, job as PendingEvaluation);
+        });
+        setPendingEvaluations(pendingMap);
+      }
+    } catch (err) {
+      console.error('Failed to load pending evaluations:', err);
+    }
+  }, [user]);
 
   const loadTests = async () => {
     if (!user) return;
@@ -344,13 +444,16 @@ export default function AIPracticeHistory() {
                 const result = testResults[test.id];
                 const testType = `ai-${test.module}` as const;
                 const hasFailedSub = hasFailedSubmission(test.id, testType);
+                const isPendingEval = pendingEvaluations.has(test.id);
+                const pendingJob = pendingEvaluations.get(test.id);
                 
                 return (
                   <Card 
                     key={test.id} 
                     className={cn(
                       "transition-colors",
-                      hasResult ? "hover:border-primary/50 cursor-pointer" : "hover:border-border"
+                      hasResult ? "hover:border-primary/50 cursor-pointer" : "hover:border-border",
+                      isPendingEval && "border-primary/30 animate-pulse"
                     )}
                     onClick={() => hasResult && handleViewResults(test)}
                   >
@@ -377,7 +480,13 @@ export default function AIPracticeHistory() {
                                 Completed
                               </Badge>
                             )}
-                            {!hasResult && !hasFailedSub && (
+                            {isPendingEval && (
+                              <Badge variant="outline" className="gap-1 text-xs border-primary/50 text-primary">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                {pendingJob?.status === 'processing' ? 'Evaluating...' : 'Queued'}
+                              </Badge>
+                            )}
+                            {!hasResult && !hasFailedSub && !isPendingEval && (
                               <Badge variant="outline" className="gap-1 text-xs border-warning/50 text-warning">
                                 <AlertCircle className="w-3 h-3" />
                                 Not Submitted
