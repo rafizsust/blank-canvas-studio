@@ -136,9 +136,10 @@ export default function AIPracticeSpeakingTest() {
   const [isRecording, setIsRecording] = useState(false);
 
   // Background evaluation state (kept for compatibility but not used in async flow)
-  const [_partEvaluations, setPartEvaluations] = useState<Record<number, any>>({});
-  const [_evaluatingParts, setEvaluatingParts] = useState<Set<number>>(new Set());
+  const [_partEvaluations] = useState<Record<number, any>>({});
+  const [_evaluatingParts] = useState<Set<number>>(new Set());
   const [evaluationStep, setEvaluationStep] = useState(0);
+
   
   // Submission error state (for resubmit capability)
   const [submissionError, setSubmissionError] = useState<ApiErrorDescriptor | null>(null);

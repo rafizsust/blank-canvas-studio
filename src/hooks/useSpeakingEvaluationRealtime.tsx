@@ -44,6 +44,10 @@ export function useSpeakingEvaluationRealtime({
   const onCompleteRef = useRef(onComplete);
   const onFailedRef = useRef(onFailed);
 
+  // Keep impure functions stable (some implementations return new references each render)
+  const toastRef = useRef(toast);
+  const navigateRef = useRef(navigate);
+
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
@@ -52,36 +56,47 @@ export function useSpeakingEvaluationRealtime({
     onFailedRef.current = onFailed;
   }, [onFailed]);
 
-  const handleJobUpdate = useCallback((job: EvaluationJob) => {
-    console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
+  useEffect(() => {
+    toastRef.current = toast;
+  }, [toast]);
 
-    setJobStatus(job.status as EvaluationJob['status']);
-    setRetryCount(job.retry_count || 0);
-    setLastError(job.last_error);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
 
-    if (job.status === 'completed' && job.result_id && !hasCompletedRef.current) {
-      hasCompletedRef.current = true;
-      toast({
-        title: 'Evaluation Complete!',
-        description: 'Your speaking test results are ready.',
-      });
+  const handleJobUpdate = useCallback(
+    (job: EvaluationJob) => {
+      console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
 
-      onCompleteRef.current?.(job.result_id);
+      setJobStatus(job.status as EvaluationJob['status']);
+      setRetryCount(job.retry_count || 0);
+      setLastError(job.last_error);
 
-      if (autoNavigate) {
-        navigate(`/ai-practice/speaking/results/${testId}`);
+      if (job.status === 'completed' && job.result_id && !hasCompletedRef.current) {
+        hasCompletedRef.current = true;
+        toastRef.current({
+          title: 'Evaluation Complete!',
+          description: 'Your speaking test results are ready.',
+        });
+
+        onCompleteRef.current?.(job.result_id);
+
+        if (autoNavigate) {
+          navigateRef.current(`/ai-practice/speaking/results/${testId}`);
+        }
+      } else if (job.status === 'failed') {
+        const errorMessage = job.last_error || 'Evaluation failed. Please try again.';
+        toastRef.current({
+          title: 'Evaluation Failed',
+          description: errorMessage,
+          variant: 'destructive',
+        });
+
+        onFailedRef.current?.(errorMessage);
       }
-    } else if (job.status === 'failed') {
-      const errorMessage = job.last_error || 'Evaluation failed. Please try again.';
-      toast({
-        title: 'Evaluation Failed',
-        description: errorMessage,
-        variant: 'destructive',
-      });
-
-      onFailedRef.current?.(errorMessage);
-    }
-  }, [testId, autoNavigate, navigate, toast]);
+    },
+    [testId, autoNavigate]
+  );
 
   // Realtime subscription
   useEffect(() => {

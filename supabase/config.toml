@@ -1,1 +1,98 @@
 project_id = "jtfbocwsfxwrzfzvzgja"
+
+# Global timeout settings for long-running AI operations
+[edge_runtime]
+policy = "per_worker"
+
+[functions.import-full-listening-test]
+verify_jwt = false
+
+[functions.evaluate-speaking-submission]
+verify_jwt = true
+
+[functions.evaluate-writing-submission]
+verify_jwt = true
+
+[functions.set-user-gemini-api-key]
+verify_jwt = true
+
+[functions.explain-answer]
+verify_jwt = false
+
+[functions.analyze-performance]
+verify_jwt = true
+
+[functions.translate-word]
+verify_jwt = false
+
+[functions.generate-listening-audio]
+verify_jwt = true
+
+[functions.transcribe-listening-audio]
+verify_jwt = false
+
+[functions.import-listening-audio]
+verify_jwt = false
+
+[functions.analyze-listening-audio]
+verify_jwt = true
+
+[functions.admin-listening-action]
+verify_jwt = false
+
+[functions.generate-ai-practice]
+verify_jwt = true
+
+[functions.evaluate-ai-practice-writing]
+verify_jwt = true
+
+[functions.explain-answer-followup]
+verify_jwt = true
+
+[functions.ai-speaking-session]
+verify_jwt = true
+
+[functions.evaluate-ai-speaking]
+verify_jwt = true
+
+[functions.generate-gemini-tts]
+verify_jwt = true
+
+[functions.evaluate-ai-speaking-part]
+verify_jwt = true
+
+[functions.gemini-quota]
+verify_jwt = true
+
+[functions.upload-media]
+verify_jwt = false
+
+[functions.bulk-generate-tests]
+verify_jwt = true
+
+[functions.get-job-status]
+verify_jwt = false
+
+[functions.get-smart-test]
+verify_jwt = false
+
+[functions.publish-generated-tests]
+verify_jwt = true
+
+[functions.cleanup-expired-tests]
+verify_jwt = false
+
+[functions.delete-media]
+verify_jwt = true
+
+[functions.download-media]
+verify_jwt = true
+
+[functions.reset-user-api-quotas]
+verify_jwt = false
+
+[functions.resolve-r2-public-urls]
+verify_jwt = false
+
+[functions.evaluate-speaking-async]
+verify_jwt = false

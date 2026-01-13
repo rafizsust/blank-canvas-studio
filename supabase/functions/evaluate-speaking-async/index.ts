@@ -358,17 +358,7 @@ async function runEvaluation(
   }
 
   if (!result) {
-    // Check if we should retry the whole job later
-    const newRetryCount = (retry_count || 0) + 1;
-    if (newRetryCount < (max_retries || 5)) {
-      console.log(`[runEvaluation] Scheduling job retry ${newRetryCount}`);
-      await supabaseService
-        .from('speaking_evaluation_jobs')
-        .update({ status: 'pending', retry_count: newRetryCount, last_error: 'All models failed' })
-        .eq('id', jobId);
-      return;
-    }
-    throw new Error('Evaluation failed after all retries');
+    throw new Error('Evaluation failed: all models/keys exhausted');
   }
 
   // Calculate band score
@@ -384,6 +374,13 @@ async function runEvaluation(
   }
 
   // Save to ai_practice_results
+  const transcriptsByPart = (result?.transcripts_by_part && typeof result.transcripts_by_part === 'object')
+    ? result.transcripts_by_part
+    : {};
+  const transcriptsByQuestion = (result?.transcripts_by_question && typeof result.transcripts_by_question === 'object')
+    ? result.transcripts_by_question
+    : {};
+
   const { data: resultRow, error: saveError } = await supabaseService
     .from('ai_practice_results')
     .insert({
@@ -393,13 +390,15 @@ async function runEvaluation(
       score: Math.round(overallBand * 10),
       band_score: overallBand,
       total_questions: audioContents.length,
-      time_spent_seconds: durations ? Math.round(Object.values(durations as Record<string, number>).reduce((a, b) => a + b, 0)) : 60,
+      time_spent_seconds: durations
+        ? Math.round(Object.values(durations as Record<string, number>).reduce((a, b) => a + b, 0))
+        : 60,
       question_results: result,
-      // IMPORTANT: store client-usable audio_urls (and keep file_paths for internal use)
+      // IMPORTANT: store client-usable audio_urls + transcripts for results UI
       answers: {
         audio_urls: audioUrls,
-        transcripts_by_part: {},
-        transcripts_by_question: {},
+        transcripts_by_part: transcriptsByPart,
+        transcripts_by_question: transcriptsByQuestion,
         file_paths,
       },
       completed_at: new Date().toISOString(),
@@ -436,14 +435,55 @@ async function decryptKey(encrypted: string, appKey: string): Promise<string> {
 }
 
 function buildPrompt(payload: any, topic?: string, difficulty?: string, fluencyFlag?: boolean): string {
-  let prompt = `You are an expert IELTS Speaking examiner. Evaluate the candidate's audio recordings.\n`;
-  prompt += `Topic: ${topic || 'General'}\nDifficulty: ${difficulty || 'Medium'}\n\n`;
-  if (fluencyFlag) prompt += `Note: Part 2 speaking was under 80 seconds.\n\n`;
-  
-  prompt += `Evaluate using IELTS criteria: Fluency & Coherence, Lexical Resource, Grammatical Range, Pronunciation.\n\n`;
-  prompt += `Return JSON: { "overall_band": 6.5, "criteria": { "fluency_coherence": { "band": 6.5, "feedback": "..." }, "lexical_resource": {...}, "grammatical_range": {...}, "pronunciation": {...} }, "summary": "...", "improvements": ["..."] }`;
-  
-  return prompt;
+  const parts = Array.isArray(payload?.speakingParts) ? payload.speakingParts : [];
+  const questions = parts
+    .flatMap((p: any) => (Array.isArray(p?.questions) ? p.questions.map((q: any) => ({
+      part_number: Number(p?.part_number),
+      question_number: Number(q?.question_number),
+      question_text: String(q?.question_text || ''),
+    })) : []))
+    .filter((q: any) => q.part_number === 1 || q.part_number === 2 || q.part_number === 3);
+
+  const questionJson = JSON.stringify(questions);
+
+  return [
+    `You are an expert IELTS Speaking examiner.`,
+    `Evaluate the candidate's audio recordings for ALL parts provided.`,
+    `Topic: ${topic || 'General'}. Difficulty: ${difficulty || 'Medium'}.`,
+    fluencyFlag ? `Important: Part 2 speaking was under 80 seconds; reflect this in Fluency & Coherence feedback.` : null,
+    ``,
+    `You must return STRICT JSON ONLY (no markdown, no backticks).`,
+    `Use this exact schema and key names:`,
+    ``,
+    `{`,
+    `  "overall_band": 6.5,`,
+    `  "criteria": {`,
+    `    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },`,
+    `    "lexical_resource": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },`,
+    `    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },`,
+    `    "pronunciation": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] }`,
+    `  },`,
+    `  "summary": "1-3 sentences overall summary",`,
+    `  "improvements": ["Top 5 actionable improvements"],`,
+    `  "transcripts_by_part": { "1": "...", "2": "...", "3": "..." },`,
+    `  "transcripts_by_question": {`,
+    `    "1": [{"question_number": 1, "question_text": "...", "transcript": "..."}],`,
+    `    "2": [{"question_number": 5, "question_text": "...", "transcript": "..."}],`,
+    `    "3": [{"question_number": 9, "question_text": "...", "transcript": "..."}]`,
+    `  },`,
+    `  "modelAnswers": [{`,
+    `    "partNumber": 1,`,
+    `    "question": "...",`,
+    `    "candidateResponse": "...",`,
+    `    "modelAnswerBand7": "...",`,
+    `    "modelAnswerBand8": "...",`,
+    `    "keyFeatures": ["..."]`,
+    `  }]`,
+    `}`,
+    ``,
+    `For transcripts: keep them concise but complete; if audio is unclear, write "(inaudible)" for missing words.`,
+    `Use these questions (JSON): ${questionJson}`,
+  ].filter(Boolean).join('\n');
 }
 
 function parseJson(text: string): any {
