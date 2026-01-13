@@ -454,6 +454,10 @@ serve(async (req) => {
           }
           contentParts.push({ text: prompt });
 
+          // Track quota/rate-limit errors per-model so we can fall back to the next model
+          // before burning through the entire key pool.
+          let lastQuotaError: QuotaError | null = null;
+
           // Retry ONCE on temporary rate limit (RetryInfo) instead of burning through all keys
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
@@ -494,6 +498,7 @@ serve(async (req) => {
               const retryAfter = extractRetryAfterSeconds(modelError);
               const permanent = isPermanentQuotaExhausted(modelError) || retryAfter === undefined;
 
+              // Temporary rate limit: wait once and retry SAME model.
               if (!permanent && retryAfter && retryAfter > 0 && attempt === 0) {
                 sawTemporaryRateLimit = true;
                 bestRetryAfterSeconds =
@@ -505,11 +510,25 @@ serve(async (req) => {
                 continue;
               }
 
-              throw new QuotaError(`Gemini quota/rate limit: ${msg}`, {
+              // IMPORTANT BUGFIX:
+              // Quota/billing issues can be MODEL-SPECIFIC (e.g., Gemini 2.x not enabled) while
+              // Gemini 1.5 still works for the SAME API key. So we record the quota error and
+              // fall through to the NEXT model instead of switching keys immediately.
+              lastQuotaError = new QuotaError(`Gemini quota/rate limit: ${msg}`, {
                 permanent,
                 retryAfterSeconds: retryAfter,
               });
+              break; // break attempt loop -> next model
             }
+          }
+
+          if (evaluationResult) break;
+
+          // If this model only failed due to quota/rate limit, try the next model.
+          if (lastQuotaError) {
+            const isLastModel = GEMINI_MODELS[GEMINI_MODELS.length - 1] === modelName;
+            if (isLastModel) throw lastQuotaError;
+            continue;
           }
         }
 
