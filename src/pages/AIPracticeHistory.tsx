@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+import { useBrowserNotifications } from '@/hooks/useBrowserNotifications';
 import { supabase } from '@/integrations/supabase/client';
 import { 
   BookOpen, 
@@ -25,6 +26,8 @@ import {
   AlertCircle,
   RefreshCw,
   Loader2,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -65,6 +68,13 @@ export default function AIPracticeHistory() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user, loading: authLoading } = useAuth();
+  const { 
+    isSupported: notificationsSupported, 
+    permission: notificationPermission, 
+    requestPermission,
+    notifyEvaluationComplete,
+    notifyEvaluationFailed,
+  } = useBrowserNotifications();
   const [tests, setTests] = useState<AIPracticeTest[]>([]);
   const [testResults, setTestResults] = useState<Record<string, AIPracticeResult>>({});
   const [loading, setLoading] = useState(true);
@@ -116,10 +126,18 @@ export default function AIPracticeHistory() {
               description: 'Your speaking test results are now available.',
             });
 
+            // Show browser push notification
+            notifyEvaluationComplete(undefined, () => {
+              navigate(`/ai-practice/speaking/results/${job.test_id}`);
+            });
+
             // Reload results to show the new completion
             loadTests();
           } else if (job.status === 'failed') {
-            // Keep in map to show "Failed" badge with retry option
+            // Check if max retries reached
+            const isMaxRetriesReached = (job.retry_count || 0) >= MAX_RETRIES;
+            
+            // Keep in map to show "Failed" badge
             setPendingEvaluations(prev => {
               const updated = new Map(prev);
               updated.set(job.test_id, job as PendingEvaluation);
@@ -127,10 +145,17 @@ export default function AIPracticeHistory() {
             });
 
             toast({
-              title: 'Evaluation Failed',
-              description: job.last_error || 'There was an issue evaluating your speaking test. You can retry.',
+              title: isMaxRetriesReached ? 'Evaluation Permanently Failed' : 'Evaluation Failed',
+              description: isMaxRetriesReached 
+                ? 'Max retries exceeded. Please try generating a new test.'
+                : (job.last_error || 'There was an issue evaluating your speaking test. You can retry.'),
               variant: 'destructive',
             });
+
+            // Browser push notification for permanent failure
+            if (isMaxRetriesReached) {
+              notifyEvaluationFailed('Max retries exceeded. Please try generating a new test.');
+            }
           } else if (job.status === 'stale') {
             // Job timed out - show as stale with retry option
             setPendingEvaluations(prev => {
@@ -457,6 +482,31 @@ export default function AIPracticeHistory() {
                 Review and retake your previously generated AI practice tests
               </p>
             </div>
+            
+            {/* Notification Toggle */}
+            {notificationsSupported && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={requestPermission}
+                className={cn(
+                  "ml-auto gap-2",
+                  notificationPermission === 'granted' && "text-primary border-primary/50"
+                )}
+                title={notificationPermission === 'granted' 
+                  ? 'Notifications enabled' 
+                  : 'Enable notifications for evaluation updates'}
+              >
+                {notificationPermission === 'granted' ? (
+                  <Bell className="w-4 h-4" />
+                ) : (
+                  <BellOff className="w-4 h-4" />
+                )}
+                <span className="hidden sm:inline">
+                  {notificationPermission === 'granted' ? 'Notifications On' : 'Enable Notifications'}
+                </span>
+              </Button>
+            )}
           </div>
 
           {/* Module Filter */}
