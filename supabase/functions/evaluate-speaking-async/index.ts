@@ -76,6 +76,7 @@ interface EvaluationRequest {
   topic?: string;
   difficulty?: string;
   fluencyFlag?: boolean;
+  retryJobId?: string; // If this is a retry, use existing job instead of creating new one
 }
 
 // Upload audio to Google File API using direct HTTP (Deno-compatible)
@@ -177,7 +178,7 @@ serve(async (req) => {
     }
 
     const body: EvaluationRequest = await req.json();
-    const { testId, filePaths, durations, topic, difficulty, fluencyFlag } = body;
+    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId } = body;
 
     if (!testId || !filePaths || Object.keys(filePaths).length === 0) {
       return new Response(JSON.stringify({ error: 'Missing testId or filePaths' }), {
@@ -186,33 +187,64 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[evaluate-speaking-async] Creating job for test ${testId}, ${Object.keys(filePaths).length} files`);
+    let job: any;
 
-    // Create job record in database (triggers realtime for frontend)
-    const { data: job, error: jobError } = await supabaseService
-      .from('speaking_evaluation_jobs')
-      .insert({
-        user_id: user.id,
-        test_id: testId,
-        status: 'pending',
-        file_paths: filePaths,
-        durations: durations || {},
-        topic,
-        difficulty,
-        fluency_flag: fluencyFlag || false,
-      })
-      .select()
-      .single();
+    // Check if this is a retry (reuse existing job record)
+    if (retryJobId) {
+      console.log(`[evaluate-speaking-async] Retry mode - reusing job ${retryJobId}`);
+      
+      const { data: existingJob, error: fetchError } = await supabaseService
+        .from('speaking_evaluation_jobs')
+        .select('*')
+        .eq('id', retryJobId)
+        .single();
 
-    if (jobError) {
-      console.error('[evaluate-speaking-async] Job creation failed:', jobError);
-      return new Response(JSON.stringify({ error: 'Failed to create job' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      if (fetchError || !existingJob) {
+        console.error('[evaluate-speaking-async] Failed to fetch retry job:', fetchError);
+        return new Response(JSON.stringify({ error: 'Retry job not found' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Update status to processing
+      await supabaseService
+        .from('speaking_evaluation_jobs')
+        .update({ status: 'processing', updated_at: new Date().toISOString() })
+        .eq('id', retryJobId);
+
+      job = existingJob;
+    } else {
+      console.log(`[evaluate-speaking-async] Creating new job for test ${testId}, ${Object.keys(filePaths).length} files`);
+
+      // Create job record in database (triggers realtime for frontend)
+      const { data: newJob, error: jobError } = await supabaseService
+        .from('speaking_evaluation_jobs')
+        .insert({
+          user_id: user.id,
+          test_id: testId,
+          status: 'pending',
+          file_paths: filePaths,
+          durations: durations || {},
+          topic,
+          difficulty,
+          fluency_flag: fluencyFlag || false,
+        })
+        .select()
+        .single();
+
+      if (jobError) {
+        console.error('[evaluate-speaking-async] Job creation failed:', jobError);
+        return new Response(JSON.stringify({ error: 'Failed to create job' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      job = newJob;
     }
 
-    console.log(`[evaluate-speaking-async] Job created: ${job.id}`);
+    console.log(`[evaluate-speaking-async] Job ${retryJobId ? 'retry' : 'created'}: ${job.id}`);
 
     // Background processing function
     const processInBackground = async () => {

@@ -35,8 +35,11 @@ import type { Tables } from '@/integrations/supabase/types';
 interface PendingEvaluation {
   id: string;
   test_id: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'stale' | 'retrying';
   created_at: string;
+  updated_at?: string;
+  last_error?: string | null;
+  retry_count?: number;
 }
 
 type AIPracticeTest = Tables<'ai_practice_tests'>;
@@ -113,21 +116,35 @@ export default function AIPracticeHistory() {
             // Reload results to show the new completion
             loadTests();
           } else if (job.status === 'failed') {
+            // Keep in map to show "Failed" badge with retry option
             setPendingEvaluations(prev => {
               const updated = new Map(prev);
-              updated.delete(job.test_id);
+              updated.set(job.test_id, job as PendingEvaluation);
               return updated;
             });
 
             toast({
               title: 'Evaluation Failed',
-              description: 'There was an issue evaluating your speaking test.',
+              description: job.last_error || 'There was an issue evaluating your speaking test. You can retry.',
               variant: 'destructive',
             });
-          } else if (job.status === 'pending' || job.status === 'processing') {
+          } else if (job.status === 'stale') {
+            // Job timed out - show as stale with retry option
             setPendingEvaluations(prev => {
               const updated = new Map(prev);
-              updated.set(job.test_id, job);
+              updated.set(job.test_id, job as PendingEvaluation);
+              return updated;
+            });
+
+            toast({
+              title: 'Evaluation Timed Out',
+              description: 'The evaluation timed out. Retrying automatically...',
+              variant: 'destructive',
+            });
+          } else if (['pending', 'processing', 'retrying'].includes(job.status)) {
+            setPendingEvaluations(prev => {
+              const updated = new Map(prev);
+              updated.set(job.test_id, job as PendingEvaluation);
               return updated;
             });
           }
@@ -149,9 +166,9 @@ export default function AIPracticeHistory() {
     try {
       const { data: jobs } = await supabase
         .from('speaking_evaluation_jobs')
-        .select('id, test_id, status, created_at')
+        .select('id, test_id, status, created_at, updated_at, last_error, retry_count')
         .eq('user_id', user.id)
-        .in('status', ['pending', 'processing']);
+        .in('status', ['pending', 'processing', 'stale', 'retrying', 'failed']);
 
       if (jobs && jobs.length > 0) {
         const pendingMap = new Map<string, PendingEvaluation>();
@@ -249,7 +266,52 @@ export default function AIPracticeHistory() {
     }
   };
 
-  // Navigate to results page for a test (if results exist)
+  // Retry a failed/stale speaking evaluation
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  
+  const handleRetryEvaluation = async (testId: string) => {
+    const pendingJob = pendingEvaluations.get(testId);
+    if (!pendingJob) return;
+
+    setRetryingJobId(pendingJob.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: 'Error', description: 'Please log in to retry', variant: 'destructive' });
+        return;
+      }
+
+      const response = await supabase.functions.invoke('retry-speaking-evaluation', {
+        body: { jobId: pendingJob.id },
+      });
+
+      if (response.error) {
+        throw new Error(response.error.message);
+      }
+
+      toast({
+        title: 'Retry Started',
+        description: 'Evaluation is being retried. Please wait...',
+      });
+
+      // Update local state to show retrying
+      setPendingEvaluations(prev => {
+        const updated = new Map(prev);
+        updated.set(testId, { ...pendingJob, status: 'retrying' });
+        return updated;
+      });
+
+    } catch (err: any) {
+      console.error('Failed to retry evaluation:', err);
+      toast({
+        title: 'Retry Failed',
+        description: err.message || 'Failed to retry evaluation',
+        variant: 'destructive',
+      });
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
   const handleViewResults = (test: AIPracticeTest) => {
     const result = testResults[test.id];
     if (!result) {
@@ -480,10 +542,22 @@ export default function AIPracticeHistory() {
                                 Completed
                               </Badge>
                             )}
-                            {isPendingEval && (
+                            {isPendingEval && pendingJob && ['pending', 'processing'].includes(pendingJob.status) && (
                               <Badge variant="outline" className="gap-1 text-xs border-primary/50 text-primary">
                                 <Loader2 className="w-3 h-3 animate-spin" />
-                                {pendingJob?.status === 'processing' ? 'Evaluating...' : 'Queued'}
+                                {pendingJob.status === 'processing' ? 'Evaluating...' : 'Queued'}
+                              </Badge>
+                            )}
+                            {isPendingEval && pendingJob?.status === 'retrying' && (
+                              <Badge variant="outline" className="gap-1 text-xs border-warning/50 text-warning">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Retrying...
+                              </Badge>
+                            )}
+                            {isPendingEval && pendingJob && ['failed', 'stale'].includes(pendingJob.status) && (
+                              <Badge variant="outline" className="gap-1 text-xs border-destructive/50 text-destructive">
+                                <AlertCircle className="w-3 h-3" />
+                                {pendingJob.status === 'stale' ? 'Timed Out' : 'Evaluation Failed'}
                               </Badge>
                             )}
                             {!hasResult && !hasFailedSub && !isPendingEval && (
@@ -531,6 +605,23 @@ export default function AIPracticeHistory() {
                               title="View Evaluation"
                             >
                               <Eye className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {/* Retry button for failed/stale speaking evaluations */}
+                          {isPendingEval && pendingJob && ['failed', 'stale'].includes(pendingJob.status) && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRetryEvaluation(test.id)}
+                              disabled={retryingJobId === pendingJob.id}
+                              className="gap-1 border-warning text-warning hover:bg-warning/10"
+                            >
+                              {retryingJobId === pendingJob.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-4 h-4" />
+                              )}
+                              <span className="hidden sm:inline">Retry</span>
                             </Button>
                           )}
                           <Button
