@@ -435,34 +435,68 @@ serve(async (req) => {
     }
     
     // Extract question IDs from the audioData keys sent by the client.
-    // Client uses format: part1-q{UUID}, part2-q{UUID}, part3-q{UUID}
-    // We need to use these exact IDs when building the Gemini prompt.
-    const audioKeysByPart: Record<number, string[]> = { 1: [], 2: [], 3: [] };
+    // Client uses format: part1-q{questionId}, part2-q{questionId}, part3-q{questionId}
+    // IMPORTANT: Object key order from the client is not reliable enough to map by index.
+    // We must sort deterministically (prefer the embedded q-number when present) to avoid
+    // swapping transcripts/model answers between questions.
+
+    const parseClientQuestionOrder = (questionId: string): number | null => {
+      // Supported IDs:
+      // - p3-q4-<hash>
+      // - q4-<hash>
+      // - any UUID-like string (no order)
+      const m = questionId.match(/(?:^|-)q(\d+)(?:-|$)/i);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    type ClientQuestionId = { id: string; order: number | null };
+    const audioKeysByPart: Record<number, ClientQuestionId[]> = { 1: [], 2: [], 3: [] };
+
     for (const key of audioKeys) {
       const match = key.match(/^part(\d)-q(.+)$/);
-      if (match) {
-        const partNum = parseInt(match[1], 10);
-        if (partNum >= 1 && partNum <= 3) {
-          audioKeysByPart[partNum].push(match[2]); // Extract question ID
-        }
-      }
+      if (!match) continue;
+
+      const partNum = parseInt(match[1], 10);
+      if (partNum < 1 || partNum > 3) continue;
+
+      const questionId = match[2];
+      audioKeysByPart[partNum].push({ id: questionId, order: parseClientQuestionOrder(questionId) });
     }
-    console.log(`[evaluate-ai-speaking] Audio keys by part: part1=${audioKeysByPart[1].length}, part2=${audioKeysByPart[2].length}, part3=${audioKeysByPart[3].length}`);
+
+    // Sort to ensure stable mapping: (known order asc) then (unknown order) then (id asc)
+    for (const partNum of [1, 2, 3]) {
+      audioKeysByPart[partNum].sort((a, b) => {
+        const ao = a.order ?? Number.POSITIVE_INFINITY;
+        const bo = b.order ?? Number.POSITIVE_INFINITY;
+        if (ao !== bo) return ao - bo;
+        return a.id.localeCompare(b.id);
+      });
+    }
+
+    const getClientIdsForPart = (partNum: 1 | 2 | 3): string[] => audioKeysByPart[partNum].map((x) => x.id);
+
+    console.log(
+      `[evaluate-ai-speaking] Audio keys by part: part1=${audioKeysByPart[1].length}, part2=${audioKeysByPart[2].length}, part3=${audioKeysByPart[3].length}`,
+    );
 
     // Transform part1/part2/part3 format to speakingParts array if needed
     // Preset speaking tests use {part1: {questions: string[], instruction}, part2: {...}, part3: {...}}
     let speakingParts: SpeakingPart[] = [];
-    
+
     if (payload.speakingParts) {
       // Already in correct format - but we should update IDs to match client audio keys if needed
       speakingParts = payload.speakingParts.slice().sort((a: SpeakingPart, b: SpeakingPart) => a.part_number - b.part_number);
-      
+
       // For each part, if the client sent audio keys with different IDs, update the question IDs to match
       for (const part of speakingParts) {
-        const clientIds = audioKeysByPart[part.part_number];
+        const clientIds = getClientIdsForPart(part.part_number);
         if (clientIds.length > 0 && part.questions?.length) {
           for (let i = 0; i < Math.min(clientIds.length, part.questions.length); i++) {
-            console.log(`[evaluate-ai-speaking] Mapping part${part.part_number} q${i+1}: server id=${part.questions[i].id} -> client id=${clientIds[i]}`);
+            console.log(
+              `[evaluate-ai-speaking] Mapping part${part.part_number} q${i + 1}: server id=${part.questions[i].id} -> client id=${clientIds[i]}`,
+            );
             part.questions[i].id = clientIds[i];
           }
         }
@@ -472,10 +506,10 @@ serve(async (req) => {
       for (const partKey of ['part1', 'part2', 'part3']) {
         const rawPart = payload[partKey];
         if (!rawPart) continue;
-        
+
         const partNumber = parseInt(partKey.slice(4)) as 1 | 2 | 3;
-        const clientIds = audioKeysByPart[partNumber];
-        
+        const clientIds = getClientIdsForPart(partNumber);
+
         let questions: SpeakingQuestion[] = Array.isArray(rawPart.questions)
           ? rawPart.questions.map((q: any, idx: number) => {
               const questionText = typeof q === 'string' ? q : (q?.question_text ?? '');

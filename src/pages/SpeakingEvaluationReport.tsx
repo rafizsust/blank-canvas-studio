@@ -85,6 +85,13 @@ interface PartAnalysis {
   areas_for_improvement: string[];
 }
 
+interface TranscriptEntry {
+  segment_key?: string;
+  question_number: number;
+  question_text: string;
+  transcript: string;
+}
+
 interface EvaluationReport {
   fluency_coherence?: CriterionScore;
   lexical_resource?: CriterionScore;
@@ -99,6 +106,7 @@ interface EvaluationReport {
   raw_response?: string;
   parse_error?: string;
   transcripts?: Record<string, string>;
+  transcripts_by_question?: Record<string, TranscriptEntry[]>; // keyed by part number as string
   modelAnswers?: ModelAnswer[];
   lexical_upgrades?: LexicalUpgrade[];
   part_analysis?: PartAnalysis[];
@@ -515,12 +523,30 @@ export default function SpeakingEvaluationReport() {
                     const questions = group?.speaking_questions || [];
                     
                     // Get transcripts from evaluation report
-                    const getTranscript = (questionId: string) => {
-                      return evaluationReport?.transcripts?.[`part${partNum}-q${questionId}`] || null;
-                    };
+                    const transcriptsForPart: TranscriptEntry[] =
+                      (evaluationReport?.transcripts_by_question?.[String(partNum)] as TranscriptEntry[] | undefined) || [];
 
-                    // Fallback: Extract from model answers
-                    const modelAnswersForPart = evaluationReport?.modelAnswers?.filter(m => m.partNumber === partNum) || [];
+                    const transcriptByQuestionNumber = new Map<number, TranscriptEntry>();
+                    for (const t of transcriptsForPart) {
+                      if (typeof t?.question_number === 'number') transcriptByQuestionNumber.set(t.question_number, t);
+                    }
+
+                    // Model answers for this part (normalize into a lookup by questionNumber)
+                    const modelAnswersForPart = (evaluationReport?.modelAnswers || []).filter(
+                      (m) => m.partNumber === partNum,
+                    );
+
+                    const modelByQuestionNumber = new Map<number, ModelAnswer>();
+                    for (const m of modelAnswersForPart) {
+                      if (typeof (m as any)?.questionNumber === 'number') {
+                        modelByQuestionNumber.set((m as any).questionNumber, m);
+                      }
+                    }
+
+                    // Stable fallback ordering when Gemini returns modelAnswers without questionNumber
+                    const modelAnswersSorted = modelAnswersForPart
+                      .slice()
+                      .sort((a, b) => (Number((a as any).questionNumber) || 0) - (Number((b as any).questionNumber) || 0));
 
                     return (
                       <div key={partNum} className="border rounded-lg p-4 space-y-4">
@@ -541,12 +567,7 @@ export default function SpeakingEvaluationReport() {
                               <Volume2 className="w-3 h-3" />
                               Part {partNum} Recording
                             </p>
-                            <audio
-                              controls
-                              src={audioUrl}
-                              className="w-full h-10"
-                              preload="metadata"
-                            >
+                            <audio controls src={audioUrl} className="w-full h-10" preload="metadata">
                               Your browser does not support audio playback.
                             </audio>
                           </div>
@@ -556,25 +577,34 @@ export default function SpeakingEvaluationReport() {
                         <div className="space-y-3">
                           {questions.length > 0 ? (
                             questions.map((question, i) => {
-                              const transcript = getTranscript(question.id);
-                              const modelAnswer = modelAnswersForPart[i];
-                              const candidateResponse = modelAnswer?.candidateResponse;
-                              
+                              const qn = question.question_number;
+                              const transcriptEntry = transcriptByQuestionNumber.get(qn);
+
+                              const matchingModel =
+                                modelByQuestionNumber.get(qn) ||
+                                // fallback to position only AFTER sorting by questionNumber
+                                modelAnswersSorted[i];
+
+                              const candidateResponse = matchingModel?.candidateResponse;
+                              const transcript = transcriptEntry?.transcript || candidateResponse || '';
+
                               return (
                                 <div key={question.id} className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0">
                                   <p className="text-sm font-medium">
-                                    Q{question.question_number}: {question.question_text}
+                                    Q{qn}: {question.question_text}
                                   </p>
-                                  
+
                                   <div className="pl-3 border-l-2 border-muted">
                                     <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
                                       <FileText className="w-3 h-3" />
                                       Transcript:
                                     </p>
                                     <p className="text-sm text-muted-foreground whitespace-pre-line">
-                                      {transcript || candidateResponse || (
+                                      {transcript || (
                                         <span className="italic text-muted-foreground/70">
-                                          {audioUrl ? '(Transcript unavailable - listen to the recording above)' : '(No transcript recorded)'}
+                                          {audioUrl
+                                            ? '(Transcript unavailable - listen to the recording above)'
+                                            : '(No transcript recorded)'}
                                         </span>
                                       )}
                                     </p>
@@ -583,9 +613,7 @@ export default function SpeakingEvaluationReport() {
                               );
                             })
                           ) : (
-                            <p className="text-sm text-muted-foreground italic">
-                              No questions available for this part.
-                            </p>
+                            <p className="text-sm text-muted-foreground italic">No questions available for this part.</p>
                           )}
                         </div>
                       </div>
