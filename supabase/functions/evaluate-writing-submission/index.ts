@@ -8,6 +8,32 @@ const corsHeaders = {
 };
 
 // ============================================================================
+// PERFORMANCE LOGGING - Track AI calls for analytics dashboard
+// ============================================================================
+async function logModelPerformance(
+  serviceClient: any,
+  modelName: string,
+  status: 'success' | 'error' | 'quota_exceeded',
+  responseTimeMs?: number,
+  errorMessage?: string,
+  apiKeyId?: string
+): Promise<void> {
+  try {
+    await serviceClient.rpc('log_model_performance', {
+      p_api_key_id: apiKeyId || null,
+      p_model_name: modelName,
+      p_task_type: 'evaluate_writing',
+      p_status: status,
+      p_response_time_ms: responseTimeMs || null,
+      p_error_message: errorMessage?.slice(0, 500) || null,
+    });
+    console.log(`[PerformanceLog] ${status} for ${modelName} (evaluate_writing)`);
+  } catch (err) {
+    console.warn('[PerformanceLog] Failed to log:', err);
+  }
+}
+
+// ============================================================================
 // CREDIT SYSTEM - Cost Map and Daily Limits
 // ============================================================================
 const COSTS = {
@@ -307,6 +333,7 @@ serve(async (req) => {
     let usedModel: string | null = null;
 
     for (const modelName of GEMINI_MODELS_FALLBACK_ORDER) {
+      const startTime = Date.now();
       console.log(`Attempting evaluation with Gemini model: ${modelName}`);
       const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`;
 
@@ -432,19 +459,38 @@ IMPORTANT: Write your feedback as a teacher speaking directly to the student. Us
           }),
         });
 
+        const responseTimeMs = Date.now() - startTime;
+
         if (geminiResponse.ok) {
           const geminiData = await geminiResponse.json();
           const content = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
           if (content) {
             responseText = content;
             usedModel = modelName;
+            // Log success
+            await logModelPerformance(serviceClient, modelName, 'success', responseTimeMs);
             break; // Exit loop on successful response with content
           } else {
             console.warn(`Model ${modelName} returned OK but no content. Trying next model.`);
+            await logModelPerformance(serviceClient, modelName, 'error', responseTimeMs, 'Empty response');
           }
         } else {
           const errorText = await geminiResponse.text();
           console.error(`Gemini API error with model ${modelName} (Status: ${geminiResponse.status}): ${errorText}`);
+
+          // Determine if quota error
+          const isQuota = geminiResponse.status === 429 || 
+            errorText.toLowerCase().includes('quota') || 
+            errorText.toLowerCase().includes('resource_exhausted');
+
+          // Log error or quota_exceeded
+          await logModelPerformance(
+            serviceClient, 
+            modelName, 
+            isQuota ? 'quota_exceeded' : 'error',
+            responseTimeMs,
+            errorText.slice(0, 200)
+          );
 
           // Check for recoverable errors: rate limit (429), server errors (5xx), or specific messages
           const isRecoverableError = 
@@ -464,7 +510,9 @@ IMPORTANT: Write your feedback as a teacher speaking directly to the student. Us
           }
         }
       } catch (fetchError: any) {
+        const responseTimeMs = Date.now() - startTime;
         console.error(`Fetch error with model ${modelName}:`, fetchError.message);
+        await logModelPerformance(serviceClient, modelName, 'error', responseTimeMs, fetchError.message);
         // Network error or other fetch-related issue, try next model
         continue;
       }
