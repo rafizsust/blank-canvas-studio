@@ -377,7 +377,12 @@ serve(async (req) => {
                 .eq('id', jobId)
                 .eq('lock_token', lockToken);
 
-              const response = await model.generateContent({ contents: [{ role: 'user', parts: contentParts }] });
+              // Wrap the Gemini call in a timeout to prevent hanging forever
+              const response = await withTimeout(
+                model.generateContent({ contents: [{ role: 'user', parts: contentParts }] }),
+                AI_CALL_TIMEOUT_MS,
+                `Gemini ${modelName} call`
+              );
               const text = response.response?.text?.() || '';
 
               if (!text) {
@@ -387,7 +392,8 @@ serve(async (req) => {
 
               const parsed = parseJson(text);
               if (parsed) {
-                evaluationResult = parsed;
+                // Apply sanitization to filter out hallucinated lexical items
+                evaluationResult = sanitizeEvaluation(parsed);
                 usedModel = modelName;
                 console.log(`[speaking-evaluate-job] Success with ${modelName}`);
                 break;

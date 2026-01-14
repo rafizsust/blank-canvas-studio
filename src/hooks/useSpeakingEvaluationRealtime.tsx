@@ -81,6 +81,12 @@ export function useSpeakingEvaluationRealtime({
         return;
       }
 
+      // Ignore cancelled jobs entirely - these were superseded by a new submission
+      if (job.status === 'failed' && job.last_error?.includes('Cancelled:')) {
+        console.log('[SpeakingEvaluationRealtime] Ignoring cancelled job:', job.id);
+        return;
+      }
+
       if (lastLoggedStatusRef.current !== job.status) {
         console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
         lastLoggedStatusRef.current = job.status;
@@ -104,7 +110,8 @@ export function useSpeakingEvaluationRealtime({
         if (autoNavigate) {
           navigateRef.current(`/ai-practice/speaking/results/${testId}`);
         }
-      } else if (job.status === 'failed') {
+      } else if (job.status === 'failed' && !job.last_error?.includes('Cancelled:')) {
+        // Only show failure toast for non-cancelled failures
         const errorMessage = job.last_error || 'Evaluation failed. Please try again.';
         toastRef.current({
           title: 'Evaluation Failed',
@@ -160,21 +167,29 @@ export function useSpeakingEvaluationRealtime({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Get the latest non-cancelled job
       const { data: jobs } = await supabase
         .from('speaking_evaluation_jobs')
         .select('*')
         .eq('test_id', testId)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(1);
+        .limit(5);
 
       if (jobs && jobs.length > 0) {
-        const job = jobs[0] as unknown as EvaluationJob;
-        handleJobUpdate(job);
+        // Find the latest job that isn't cancelled
+        const latestActiveJob = jobs.find(j => 
+          !(j.status === 'failed' && j.last_error?.includes('Cancelled:'))
+        );
+        
+        if (latestActiveJob) {
+          const job = latestActiveJob as unknown as EvaluationJob;
+          handleJobUpdate(job);
 
-        // Continue polling if not in terminal state
-        if (job.status !== 'completed' && job.status !== 'failed') {
-          pollTimerRef.current = window.setTimeout(pollJobStatus, pollInterval);
+          // Continue polling if not in terminal state
+          if (job.status !== 'completed' && job.status !== 'failed') {
+            pollTimerRef.current = window.setTimeout(pollJobStatus, pollInterval);
+          }
         }
       }
     } catch (error) {
