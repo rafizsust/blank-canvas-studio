@@ -29,6 +29,7 @@ const corsHeaders = {
 const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 const HEARTBEAT_INTERVAL_MS = 20000; // 20 seconds for AI calls
 const LOCK_DURATION_MINUTES = 8; // Longer for AI evaluation
+const AI_CALL_TIMEOUT_MS = 180000; // 3 minutes per model call
 
 class QuotaError extends Error {
   permanent: boolean;
@@ -43,10 +44,17 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function exponentialBackoffWithJitter(attempt: number, baseDelayMs = 1000, maxDelayMs = 60000): number {
-  const exponentialDelay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
-  const jitter = Math.random() * exponentialDelay * 0.5;
-  return Math.round(exponentialDelay + jitter);
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: number | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function extractRetryAfterSeconds(err: any): number | undefined {
@@ -769,12 +777,69 @@ FINAL REMINDER:
 }
 
 function parseJson(text: string): any {
-  try { return JSON.parse(text); } catch {}
+  try {
+    return JSON.parse(text);
+  } catch {}
   const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (match) try { return JSON.parse(match[1].trim()); } catch {}
+  if (match)
+    try {
+      return JSON.parse(match[1].trim());
+    } catch {}
   const objMatch = text.match(/\{[\s\S]*\}/);
-  if (objMatch) try { return JSON.parse(objMatch[0]); } catch {}
+  if (objMatch)
+    try {
+      return JSON.parse(objMatch[0]);
+    } catch {}
   return null;
+}
+
+function sanitizeEvaluation(result: any): any {
+  if (!result || typeof result !== 'object') return result;
+
+  const transcriptText = getAllTranscriptText(result);
+  const transcriptLc = transcriptText.toLowerCase();
+
+  // Remove lexical suggestions that are not literally present in the candidate transcript.
+  if (Array.isArray(result.lexical_upgrades)) {
+    result.lexical_upgrades = result.lexical_upgrades.filter((row: any) => {
+      const original = String(row?.original || '').trim();
+      if (!original) return false;
+      // Allow multi-word matches; basic substring is enough for our use-case.
+      return transcriptLc.includes(original.toLowerCase());
+    });
+  }
+
+  // If almost no speech, don't show hallucinated lexical upgrades at all.
+  const wordCount = transcriptText.split(/\s+/).filter(Boolean).length;
+  if (wordCount < 8) {
+    result.lexical_upgrades = [];
+  }
+
+  return result;
+}
+
+function getAllTranscriptText(result: any): string {
+  const chunks: string[] = [];
+  const byPart = result?.transcripts_by_part;
+  if (byPart && typeof byPart === 'object') {
+    for (const v of Object.values(byPart)) chunks.push(String(v || ''));
+  }
+  const byQ = result?.transcripts_by_question;
+  if (byQ && typeof byQ === 'object') {
+    for (const partArr of Object.values(byQ)) {
+      if (!Array.isArray(partArr)) continue;
+      for (const row of partArr) {
+        chunks.push(String((row as any)?.transcript || ''));
+      }
+    }
+  }
+  // Some older shapes store candidateResponse in modelAnswers
+  if (Array.isArray(result?.modelAnswers)) {
+    for (const ma of result.modelAnswers) {
+      chunks.push(String((ma as any)?.candidateResponse || ''));
+    }
+  }
+  return chunks.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function calculateBand(result: any): number {
@@ -785,8 +850,8 @@ function calculateBand(result: any): number {
     c.lexical_resource?.band,
     c.grammatical_range?.band,
     c.pronunciation?.band,
-  ].filter(s => typeof s === 'number');
-  
+  ].filter((s: any) => typeof s === 'number');
+
   if (scores.length === 0) return 6.0;
   const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
   return Math.round(avg * 2) / 2;

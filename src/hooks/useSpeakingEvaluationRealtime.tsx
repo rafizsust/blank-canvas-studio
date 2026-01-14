@@ -24,6 +24,8 @@ interface UseSpeakingEvaluationRealtimeOptions {
   pollInterval?: number; // Fallback polling interval in ms
 }
 
+const DEFAULT_KICK_AFTER_MS = 2.5 * 60 * 1000; // 2.5 minutes
+
 export function useSpeakingEvaluationRealtime({
   testId,
   onComplete,
@@ -33,13 +35,19 @@ export function useSpeakingEvaluationRealtime({
 }: UseSpeakingEvaluationRealtimeOptions) {
   const { toast } = useToast();
   const navigate = useNavigate();
+
   const [jobStatus, setJobStatus] = useState<EvaluationJob['status'] | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [latestJobId, setLatestJobId] = useState<string | null>(null);
+  const [latestJobUpdatedAt, setLatestJobUpdatedAt] = useState<string | null>(null);
+
   const pollTimerRef = useRef<number | null>(null);
   const hasCompletedRef = useRef(false);
   const lastLoggedStatusRef = useRef<EvaluationJob['status'] | null>(null);
+  const kickStartedRef = useRef(false);
+  const kickTimerRef = useRef<number | null>(null);
 
   // Keep callbacks stable so realtime subscription doesn't resubscribe every render
   const onCompleteRef = useRef(onComplete);
@@ -67,11 +75,19 @@ export function useSpeakingEvaluationRealtime({
 
   const handleJobUpdate = useCallback(
     (job: EvaluationJob) => {
+      // Once we have a successful completion, ignore older/late "failed" updates
+      // (common when previous attempts are cancelled after a new attempt succeeds).
+      if (hasCompletedRef.current && job.status !== 'completed') {
+        return;
+      }
+
       if (lastLoggedStatusRef.current !== job.status) {
         console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
         lastLoggedStatusRef.current = job.status;
       }
 
+      setLatestJobId(job.id);
+      setLatestJobUpdatedAt(job.updated_at || job.created_at);
       setJobStatus(job.status as EvaluationJob['status']);
       setRetryCount(job.retry_count || 0);
       setLastError(job.last_error);
@@ -167,6 +183,48 @@ export function useSpeakingEvaluationRealtime({
       pollTimerRef.current = window.setTimeout(pollJobStatus, pollInterval);
     }
   }, [testId, handleJobUpdate, pollInterval]);
+
+  // Kick the watchdog if the job seems stuck (prevents "evaluating forever")
+  const kickWatchdog = useCallback(async () => {
+    if (!latestJobId || kickStartedRef.current || hasCompletedRef.current) return;
+
+    kickStartedRef.current = true;
+    try {
+      await supabase.functions.invoke('speaking-job-runner', {
+        body: { jobId: latestJobId },
+      });
+      console.log('[SpeakingEvaluationRealtime] Watchdog kicked for job:', latestJobId);
+    } catch (e) {
+      console.warn('[SpeakingEvaluationRealtime] Failed to kick watchdog:', e);
+    }
+  }, [latestJobId]);
+
+  useEffect(() => {
+    // reset when test changes
+    kickStartedRef.current = false;
+
+    if (kickTimerRef.current) {
+      window.clearTimeout(kickTimerRef.current);
+      kickTimerRef.current = null;
+    }
+
+    if (!latestJobUpdatedAt || !latestJobId) return;
+    if (hasCompletedRef.current) return;
+
+    if (jobStatus === 'processing' || jobStatus === 'pending') {
+      // Schedule one kick; if job updates keep flowing, we reschedule.
+      kickTimerRef.current = window.setTimeout(() => {
+        void kickWatchdog();
+      }, DEFAULT_KICK_AFTER_MS);
+    }
+
+    return () => {
+      if (kickTimerRef.current) {
+        window.clearTimeout(kickTimerRef.current);
+        kickTimerRef.current = null;
+      }
+    };
+  }, [testId, latestJobUpdatedAt, latestJobId, jobStatus, kickWatchdog]);
 
   // Initial check and start polling
   useEffect(() => {

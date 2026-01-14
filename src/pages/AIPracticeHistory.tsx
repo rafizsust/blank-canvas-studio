@@ -96,6 +96,18 @@ export default function AIPracticeHistory() {
   useEffect(() => {
     if (!user) return;
 
+    const isNewer = (a: PendingEvaluation, b: PendingEvaluation) => {
+      const ta = new Date(a.created_at).getTime();
+      const tb = new Date(b.created_at).getTime();
+      return ta >= tb;
+    };
+
+    const hasNewerResult = (testId: string, jobCreatedAt: string) => {
+      const r = testResults[testId];
+      if (!r?.completed_at) return false;
+      return new Date(r.completed_at).getTime() >= new Date(jobCreatedAt).getTime();
+    };
+
     const channel = supabase
       .channel('speaking-eval-history')
       .on(
@@ -112,68 +124,60 @@ export default function AIPracticeHistory() {
 
           console.log('[AIPracticeHistory] Evaluation job update:', job.status, job.test_id);
 
-          if (job.status === 'completed') {
-            // Remove from pending and reload results
-            setPendingEvaluations(prev => {
-              const updated = new Map(prev);
-              updated.delete(job.test_id);
-              return updated;
-            });
+          // If the user already has a newer result saved, ignore late/stale failures from older attempts.
+          if (job.status === 'failed' && hasNewerResult(job.test_id, job.created_at)) {
+            return;
+          }
 
-            // Show toast notification
+          setPendingEvaluations((prev) => {
+            const existing = prev.get(job.test_id);
+            // Keep only the latest job per test_id
+            if (existing && !isNewer(job, existing)) {
+              return prev;
+            }
+
+            const updated = new Map(prev);
+
+            if (job.status === 'completed') {
+              // Remove from pending and reload results
+              updated.delete(job.test_id);
+            } else {
+              updated.set(job.test_id, job as PendingEvaluation);
+            }
+
+            return updated;
+          });
+
+          if (job.status === 'completed') {
             toast({
               title: '🎉 Speaking Evaluation Ready!',
               description: 'Your speaking test results are now available.',
             });
 
-            // Show browser push notification
             notifyEvaluationComplete(undefined, () => {
               navigate(`/ai-practice/speaking/results/${job.test_id}`);
             });
 
-            // Reload results to show the new completion
             loadTests();
           } else if (job.status === 'failed') {
-            // Check if max retries reached
             const isMaxRetriesReached = (job.retry_count || 0) >= MAX_RETRIES;
-            
-            // Keep in map to show "Failed" badge
-            setPendingEvaluations(prev => {
-              const updated = new Map(prev);
-              updated.set(job.test_id, job as PendingEvaluation);
-              return updated;
-            });
 
             toast({
               title: isMaxRetriesReached ? 'Evaluation Permanently Failed' : 'Evaluation Failed',
-              description: isMaxRetriesReached 
+              description: isMaxRetriesReached
                 ? 'Max retries exceeded. Please try generating a new test.'
                 : (job.last_error || 'There was an issue evaluating your speaking test. You can retry.'),
               variant: 'destructive',
             });
 
-            // Browser push notification for permanent failure
             if (isMaxRetriesReached) {
               notifyEvaluationFailed('Max retries exceeded. Please try generating a new test.');
             }
           } else if (job.status === 'stale') {
-            // Job timed out - show as stale with retry option
-            setPendingEvaluations(prev => {
-              const updated = new Map(prev);
-              updated.set(job.test_id, job as PendingEvaluation);
-              return updated;
-            });
-
             toast({
               title: 'Evaluation Timed Out',
               description: 'The evaluation timed out. Retrying automatically...',
               variant: 'destructive',
-            });
-          } else if (['pending', 'processing', 'retrying'].includes(job.status)) {
-            setPendingEvaluations(prev => {
-              const updated = new Map(prev);
-              updated.set(job.test_id, job as PendingEvaluation);
-              return updated;
             });
           }
         }
@@ -185,7 +189,7 @@ export default function AIPracticeHistory() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, toast]);
+  }, [user, toast, navigate, notifyEvaluationComplete, notifyEvaluationFailed, testResults]);
 
   // Load pending evaluations on mount
   const loadPendingEvaluations = useCallback(async () => {
@@ -194,21 +198,30 @@ export default function AIPracticeHistory() {
     try {
       const { data: jobs } = await supabase
         .from('speaking_evaluation_jobs')
-        .select('id, test_id, status, created_at, updated_at, last_error, retry_count')
+        .select('id, test_id, status, created_at, updated_at, last_error, retry_count, max_retries')
         .eq('user_id', user.id)
-        .in('status', ['pending', 'processing', 'stale', 'retrying', 'failed']);
+        .in('status', ['pending', 'processing', 'stale', 'retrying', 'failed'])
+        .order('created_at', { ascending: false });
 
       if (jobs && jobs.length > 0) {
         const pendingMap = new Map<string, PendingEvaluation>();
-        jobs.forEach(job => {
-          pendingMap.set(job.test_id, job as PendingEvaluation);
+        // Jobs are ordered newest-first, so first seen per test_id is the latest.
+        jobs.forEach((job) => {
+          if (!pendingMap.has(job.test_id)) {
+            // If a newer result exists, ignore old failed/pending entries.
+            const r = testResults[job.test_id];
+            if (r?.completed_at && new Date(r.completed_at).getTime() >= new Date(job.created_at).getTime()) {
+              return;
+            }
+            pendingMap.set(job.test_id, job as PendingEvaluation);
+          }
         });
         setPendingEvaluations(pendingMap);
       }
     } catch (err) {
       console.error('Failed to load pending evaluations:', err);
     }
-  }, [user]);
+  }, [user, testResults]);
 
   const loadTests = async () => {
     if (!user) return;
