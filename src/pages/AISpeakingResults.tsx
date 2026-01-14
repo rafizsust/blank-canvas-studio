@@ -275,11 +275,20 @@ export default function AISpeakingResults() {
   // Realtime subscription for async evaluation
   const {
     jobStatus,
+    // jobStage - available for future use
     isWaiting,
     isFailed,
     retryCount,
     lastError,
     isSubscribed,
+    progress,
+    currentPart,
+    totalParts,
+    latestJobId,
+    cancelJob,
+    retryJob,
+    isCancelling,
+    isRetrying,
   } = useSpeakingEvaluationRealtime({
     testId: testId || '',
     onComplete: () => {
@@ -456,18 +465,47 @@ export default function AISpeakingResults() {
                 <span>Usually 30–90 seconds</span>
               </div>
 
+              {/* Progress indicator */}
+              {progress > 0 && (
+                <div className="mb-4">
+                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                    <span>Processing Part {currentPart}/{totalParts}</span>
+                    <span>{progress}%</span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
+                </div>
+              )}
+
               {retryCount > 0 && (
-                <div className="flex items-center justify-center gap-2 text-sm text-warning">
+                <div className="flex items-center justify-center gap-2 text-sm text-warning mb-2">
                   <RefreshCw className="w-4 h-4" />
                   <span>Retry attempt {retryCount}...</span>
                 </div>
               )}
 
               {isSubscribed && (
-                <Badge variant="outline" className="mt-4">
+                <Badge variant="outline" className="mt-2">
                   <span className="w-2 h-2 rounded-full bg-success animate-pulse mr-2"></span>
                   Live updates enabled
                 </Badge>
+              )}
+
+              {/* Cancel button */}
+              {latestJobId && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="mt-4"
+                  onClick={cancelJob}
+                  disabled={isCancelling}
+                >
+                  {isCancelling ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                  )}
+                  Cancel Evaluation
+                </Button>
               )}
             </CardContent>
           </Card>
@@ -494,9 +532,13 @@ export default function AISpeakingResults() {
                   <Home className="w-4 h-4 mr-2" />
                   Go Back
                 </Button>
-                <Button onClick={() => window.location.reload()}>
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  Retry
+                <Button onClick={retryJob} disabled={isRetrying}>
+                  {isRetrying ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                  )}
+                  Retry Evaluation
                 </Button>
               </div>
             </CardContent>

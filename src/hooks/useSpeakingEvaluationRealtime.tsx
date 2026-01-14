@@ -8,9 +8,13 @@ interface EvaluationJob {
   user_id: string;
   test_id: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
+  stage?: string;
   result_id: string | null;
   last_error: string | null;
   retry_count: number;
+  progress?: number;
+  current_part?: number;
+  total_parts?: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -37,11 +41,17 @@ export function useSpeakingEvaluationRealtime({
   const navigate = useNavigate();
 
   const [jobStatus, setJobStatus] = useState<EvaluationJob['status'] | null>(null);
+  const [jobStage, setJobStage] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const [latestJobId, setLatestJobId] = useState<string | null>(null);
   const [latestJobUpdatedAt, setLatestJobUpdatedAt] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number>(0);
+  const [currentPart, setCurrentPart] = useState<number>(0);
+  const [totalParts, setTotalParts] = useState<number>(3);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const pollTimerRef = useRef<number | null>(null);
   const hasCompletedRef = useRef(false);
@@ -88,15 +98,19 @@ export function useSpeakingEvaluationRealtime({
       }
 
       if (lastLoggedStatusRef.current !== job.status) {
-        console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.id);
+        console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.stage, job.id);
         lastLoggedStatusRef.current = job.status;
       }
 
       setLatestJobId(job.id);
       setLatestJobUpdatedAt(job.updated_at || job.created_at);
       setJobStatus(job.status as EvaluationJob['status']);
+      setJobStage(job.stage || null);
       setRetryCount(job.retry_count || 0);
       setLastError(job.last_error);
+      setProgress(job.progress || 0);
+      setCurrentPart(job.current_part || 0);
+      setTotalParts(job.total_parts || 3);
 
       if (job.status === 'completed' && job.result_id && !hasCompletedRef.current) {
         hasCompletedRef.current = true;
@@ -124,6 +138,73 @@ export function useSpeakingEvaluationRealtime({
     },
     [testId, autoNavigate]
   );
+
+  // Cancel the current job
+  const cancelJob = useCallback(async () => {
+    if (!latestJobId || isCancelling) return;
+
+    setIsCancelling(true);
+    try {
+      const { error } = await supabase.functions.invoke('cancel-speaking-job', {
+        body: { jobId: latestJobId },
+      });
+
+      if (error) {
+        console.error('[SpeakingEvaluationRealtime] Cancel failed:', error);
+        toastRef.current({
+          title: 'Cancel Failed',
+          description: 'Could not cancel the evaluation. Please try again.',
+          variant: 'destructive',
+        });
+      } else {
+        toastRef.current({
+          title: 'Evaluation Cancelled',
+          description: 'Your evaluation has been cancelled.',
+        });
+        setJobStatus('failed');
+        setLastError('Cancelled by user');
+      }
+    } catch (e) {
+      console.error('[SpeakingEvaluationRealtime] Cancel error:', e);
+    } finally {
+      setIsCancelling(false);
+    }
+  }, [latestJobId, isCancelling]);
+
+  // Retry the failed job
+  const retryJob = useCallback(async () => {
+    if (!latestJobId || isRetrying) return;
+
+    setIsRetrying(true);
+    try {
+      const { error } = await supabase.functions.invoke('retry-speaking-evaluation', {
+        body: { jobId: latestJobId },
+      });
+
+      if (error) {
+        console.error('[SpeakingEvaluationRealtime] Retry failed:', error);
+        toastRef.current({
+          title: 'Retry Failed',
+          description: 'Could not retry the evaluation. Please try again.',
+          variant: 'destructive',
+        });
+      } else {
+        toastRef.current({
+          title: 'Retry Started',
+          description: 'Your evaluation is being retried.',
+        });
+        // Reset state for retry
+        hasCompletedRef.current = false;
+        setJobStatus('pending');
+        setLastError(null);
+        setProgress(0);
+      }
+    } catch (e) {
+      console.error('[SpeakingEvaluationRealtime] Retry error:', e);
+    } finally {
+      setIsRetrying(false);
+    }
+  }, [latestJobId, isRetrying]);
 
   // Realtime subscription
   useEffect(() => {
@@ -257,6 +338,7 @@ export function useSpeakingEvaluationRealtime({
 
   return {
     jobStatus,
+    jobStage,
     isSubscribed,
     isPending: jobStatus === 'pending',
     isProcessing: jobStatus === 'processing',
@@ -265,6 +347,15 @@ export function useSpeakingEvaluationRealtime({
     retryCount,
     lastError,
     isWaiting: jobStatus === 'pending' || jobStatus === 'processing',
+    // Progress info
+    progress,
+    currentPart,
+    totalParts,
+    // Job actions
+    latestJobId,
+    cancelJob,
+    retryJob,
+    isCancelling,
+    isRetrying,
   };
 }
-

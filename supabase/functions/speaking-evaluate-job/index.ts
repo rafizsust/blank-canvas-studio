@@ -31,6 +31,11 @@ const HEARTBEAT_INTERVAL_MS = 15000; // 15 seconds
 const LOCK_DURATION_MINUTES = 5;
 const AI_CALL_TIMEOUT_MS = 90000; // 90 seconds per part (shorter since we're doing smaller chunks)
 
+// Rate limiting protection - increased delays to prevent hitting RPM limits
+const BASE_RETRY_DELAY_MS = 5000; // Start with 5s delay
+const MAX_RETRY_DELAY_MS = 60000; // Max 60s delay
+const KEY_SWITCH_DELAY_MS = 2000; // 2s delay when switching keys to avoid burst
+
 class QuotaError extends Error {
   permanent: boolean;
   constructor(message: string, opts: { permanent: boolean }) {
@@ -45,8 +50,9 @@ function sleep(ms: number) {
 }
 
 function exponentialBackoffWithJitter(attempt: number, baseMs: number, maxMs: number): number {
-  const exponential = Math.min(baseMs * Math.pow(2, attempt), maxMs);
-  const jitter = Math.random() * exponential * 0.3;
+  // More aggressive backoff to handle rate limiting
+  const exponential = Math.min(baseMs * Math.pow(2.5, attempt), maxMs);
+  const jitter = Math.random() * exponential * 0.5;
   return Math.floor(exponential + jitter);
 }
 
@@ -416,7 +422,10 @@ serve(async (req) => {
                 if (isQuotaExhaustedError(errMsg)) {
                   const retryAfter = extractRetryAfterSeconds(err);
                   if (attempt < MAX_RETRIES - 1) {
-                    const delay = retryAfter ? Math.min(retryAfter * 1000, 30000) : exponentialBackoffWithJitter(attempt, 2000, 30000);
+                    // Use longer delays - minimum 10s, parse retry-after or use exponential backoff
+                    const delay = retryAfter 
+                      ? Math.min(retryAfter * 1000, MAX_RETRY_DELAY_MS) 
+                      : exponentialBackoffWithJitter(attempt, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS);
                     console.log(`[speaking-evaluate-job] Rate limited, retrying in ${Math.round(delay / 1000)}s...`);
                     await sleep(delay);
                     continue;
@@ -426,7 +435,8 @@ serve(async (req) => {
                 }
 
                 if (attempt < MAX_RETRIES - 1) {
-                  const delay = exponentialBackoffWithJitter(attempt, 1000, 15000);
+                  const delay = exponentialBackoffWithJitter(attempt, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS);
+                  console.log(`[speaking-evaluate-job] Error, retrying in ${Math.round(delay / 1000)}s...`);
                   await sleep(delay);
                   continue;
                 }
@@ -434,9 +444,10 @@ serve(async (req) => {
               }
             }
           }
-        } catch (keyError: any) {
+      } catch (keyError: any) {
           if (keyError instanceof QuotaError) {
-            console.log(`[speaking-evaluate-job] Key quota exhausted, trying next...`);
+            console.log(`[speaking-evaluate-job] Key quota exhausted, waiting before trying next key...`);
+            await sleep(KEY_SWITCH_DELAY_MS); // Add delay between key switches to prevent burst
             continue;
           }
           console.error(`[speaking-evaluate-job] Key error:`, keyError?.message);

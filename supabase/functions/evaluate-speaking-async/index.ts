@@ -7,6 +7,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
  * This function ONLY creates the job record and returns immediately.
  * Actual processing is done by process-speaking-job (separate function).
  * 
+ * NEW: Per-user concurrency limit (max 1 active job) to prevent rate limiting bursts.
+ * 
  * Benefits:
  * - Instant response to user (no waiting)
  * - No edge function timeouts during AI processing
@@ -20,6 +22,9 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+// Per-user concurrency limit
+const MAX_CONCURRENT_JOBS_PER_USER = 1;
+
 interface EvaluationRequest {
   testId: string;
   filePaths: Record<string, string>;
@@ -28,6 +33,7 @@ interface EvaluationRequest {
   difficulty?: string;
   fluencyFlag?: boolean;
   retryJobId?: string;
+  cancelExisting?: boolean; // If true, cancel existing jobs before creating new one
 }
 
 serve(async (req) => {
@@ -58,7 +64,7 @@ serve(async (req) => {
     }
 
     const body: EvaluationRequest = await req.json();
-    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId } = body;
+    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId, cancelExisting } = body;
 
     if (!testId || !filePaths || Object.keys(filePaths).length === 0) {
       return new Response(JSON.stringify({ error: 'Missing testId or filePaths' }), {
@@ -91,8 +97,11 @@ serve(async (req) => {
         .from('speaking_evaluation_jobs')
         .update({ 
           status: 'pending', 
+          stage: existingJob.google_file_uris ? 'pending_eval' : 'pending_upload',
           updated_at: new Date().toISOString(),
           last_error: null,
+          lock_token: null,
+          lock_expires_at: null,
         })
         .eq('id', retryJobId);
 
@@ -100,25 +109,49 @@ serve(async (req) => {
     } else {
       console.log(`[evaluate-speaking-async] Creating new job for test ${testId}, ${Object.keys(filePaths).length} files`);
 
-      // CANCEL any pending/processing jobs for this user and test
-      const { data: existingJobs } = await supabaseService
+      // Check per-user concurrency limit (BEFORE cancelling anything)
+      const { data: activeJobs, error: activeError } = await supabaseService
         .from('speaking_evaluation_jobs')
-        .select('id, status')
+        .select('id, status, stage, test_id, created_at')
         .eq('user_id', user.id)
-        .eq('test_id', testId)
-        .in('status', ['pending', 'processing']);
+        .in('status', ['pending', 'processing'])
+        .order('created_at', { ascending: false });
 
-      if (existingJobs && existingJobs.length > 0) {
-        console.log(`[evaluate-speaking-async] Cancelling ${existingJobs.length} existing jobs`);
+      if (activeError) {
+        console.error('[evaluate-speaking-async] Error checking active jobs:', activeError);
+      }
+
+      const currentActiveCount = activeJobs?.length || 0;
+
+      // If user has active jobs and cancelExisting is false, block submission
+      if (currentActiveCount >= MAX_CONCURRENT_JOBS_PER_USER && !cancelExisting) {
+        const activeJob = activeJobs?.[0];
+        return new Response(JSON.stringify({ 
+          error: 'CONCURRENT_LIMIT',
+          message: `You already have an evaluation in progress. Please wait for it to complete or cancel it first.`,
+          activeJobId: activeJob?.id,
+          activeTestId: activeJob?.test_id,
+          activeStatus: activeJob?.status,
+        }), {
+          status: 429,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Cancel existing jobs if requested or if we need to make room
+      if (activeJobs && activeJobs.length > 0) {
+        console.log(`[evaluate-speaking-async] Cancelling ${activeJobs.length} existing jobs`);
         await supabaseService
           .from('speaking_evaluation_jobs')
           .update({
             status: 'failed',
+            stage: 'cancelled',
             last_error: 'Cancelled: User submitted a new evaluation request.',
             updated_at: new Date().toISOString(),
+            lock_token: null,
+            lock_expires_at: null,
           })
           .eq('user_id', user.id)
-          .eq('test_id', testId)
           .in('status', ['pending', 'processing']);
       }
 
