@@ -1,5 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { 
+  getActiveGeminiKeysForModels,
+  markModelQuotaExhausted,
+  isDailyQuotaExhaustedError,
+  getTodayDate,
+  ALL_MODEL_QUOTA_COLUMNS
+} from "../_shared/apiKeyQuotaUtils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -91,7 +98,8 @@ function pickSecondaryVoice(primaryVoice: string, accent: string): string {
 }
 
 // API Key management for round-robin Gemini API calls with quota tracking
-type QuotaModelType = 'tts' | 'flash_2_5';
+// TTS Model used for audio generation
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
 interface ApiKeyRecord {
   id: string;
@@ -99,10 +107,8 @@ interface ApiKeyRecord {
   key_value: string;
   is_active: boolean;
   error_count: number;
-  tts_quota_exhausted?: boolean;
-  tts_quota_exhausted_date?: string;
-  flash_quota_exhausted?: boolean;
-  flash_quota_exhausted_date?: string;
+  // Dynamic quota fields
+  [key: string]: any;
 }
 
 // Separate caches for TTS and Flash models
@@ -111,81 +117,37 @@ let flashKeyCache: ApiKeyRecord[] = [];
 let ttsKeyIndex = 0;
 let flashKeyIndex = 0;
 
-function getTodayDate(): string {
-  return new Date().toISOString().split('T')[0];
+// List of models we use for content generation (non-TTS)
+const CONTENT_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+
+async function getActiveGeminiKeysForTTS(supabaseServiceClient: any): Promise<ApiKeyRecord[]> {
+  return getActiveGeminiKeysForModels(supabaseServiceClient, [TTS_MODEL]);
 }
 
-function isQuotaExhaustedToday(exhaustedDate: string | null | undefined): boolean {
-  if (!exhaustedDate) return false;
-  return exhaustedDate === getTodayDate();
+async function getActiveGeminiKeysForContent(supabaseServiceClient: any): Promise<ApiKeyRecord[]> {
+  return getActiveGeminiKeysForModels(supabaseServiceClient, CONTENT_MODELS);
 }
 
-async function getActiveGeminiKeysForModel(supabaseServiceClient: any, modelType: QuotaModelType): Promise<ApiKeyRecord[]> {
-  try {
-    const today = getTodayDate();
-    
-    // First, reset any quotas from previous days
-    await supabaseServiceClient.rpc('reset_api_key_quotas');
-    
-    const { data, error } = await supabaseServiceClient
-      .from('api_keys')
-      .select('id, provider, key_value, is_active, error_count, tts_quota_exhausted, tts_quota_exhausted_date, flash_quota_exhausted, flash_quota_exhausted_date')
-      .eq('provider', 'gemini')
-      .eq('is_active', true)
-      .order('error_count', { ascending: true });
-    
-    if (error) {
-      console.error('Failed to fetch API keys:', error);
-      return [];
-    }
-    
-    // Filter out keys that have exhausted quota for this model type today
-    const availableKeys = (data || []).filter((key: ApiKeyRecord) => {
-      if (modelType === 'tts') {
-        return !key.tts_quota_exhausted || !isQuotaExhaustedToday(key.tts_quota_exhausted_date);
-      } else {
-        return !key.flash_quota_exhausted || !isQuotaExhaustedToday(key.flash_quota_exhausted_date);
-      }
-    });
-    
-    console.log(`Found ${availableKeys.length} active Gemini keys available for ${modelType} model (${data?.length || 0} total active)`);
-    return availableKeys;
-  } catch (err) {
-    console.error('Error fetching API keys:', err);
-    return [];
-  }
-}
-
-// Legacy function for backward compatibility - uses flash model type by default
+// Legacy function for backward compatibility
 async function getActiveGeminiKeys(supabaseServiceClient: any): Promise<ApiKeyRecord[]> {
-  return getActiveGeminiKeysForModel(supabaseServiceClient, 'flash_2_5');
+  return getActiveGeminiKeysForContent(supabaseServiceClient);
 }
 
-async function markKeyQuotaExhausted(supabaseServiceClient: any, keyId: string, modelType: QuotaModelType): Promise<void> {
-  try {
-    const today = getTodayDate();
-    const updateData = modelType === 'tts' 
-      ? { tts_quota_exhausted: true, tts_quota_exhausted_date: today, updated_at: new Date().toISOString() }
-      : { flash_quota_exhausted: true, flash_quota_exhausted_date: today, updated_at: new Date().toISOString() };
-    
-    await supabaseServiceClient
-      .from('api_keys')
-      .update(updateData)
-      .eq('id', keyId);
-    
-    console.log(`Marked key ${keyId} as ${modelType} quota exhausted for ${today}`);
-    
-    // Remove this key from the appropriate cache
-    if (modelType === 'tts') {
-      ttsKeyCache = ttsKeyCache.filter(k => k.id !== keyId);
-    } else {
-      flashKeyCache = flashKeyCache.filter(k => k.id !== keyId);
-    }
-  } catch (err) {
-    console.error(`Failed to mark key quota exhausted:`, err);
-  }
+async function markTTSQuotaExhausted(supabaseServiceClient: any, keyId: string): Promise<void> {
+  await markModelQuotaExhausted(supabaseServiceClient, keyId, TTS_MODEL);
+  // Remove this key from the TTS cache
+  ttsKeyCache = ttsKeyCache.filter(k => k.id !== keyId);
+  console.log(`Removed key ${keyId} from TTS cache, ${ttsKeyCache.length} keys remaining`);
 }
 
+async function markContentQuotaExhausted(supabaseServiceClient: any, keyId: string, modelName: string): Promise<void> {
+  await markModelQuotaExhausted(supabaseServiceClient, keyId, modelName);
+  // Remove this key from the flash cache
+  flashKeyCache = flashKeyCache.filter(k => k.id !== keyId);
+  console.log(`Removed key ${keyId} from flash cache for ${modelName}, ${flashKeyCache.length} keys remaining`);
+}
+
+// Check if error is a quota error (broad check for rate limiting/transient)
 function isQuotaExhaustedError(errorStatus: string | number, errorMessage: string): boolean {
   return (
     errorStatus === 'RESOURCE_EXHAUSTED' ||
@@ -194,6 +156,19 @@ function isQuotaExhaustedError(errorStatus: string | number, errorMessage: strin
     errorMessage.toLowerCase().includes('rate limit') ||
     errorMessage.toLowerCase().includes('resource exhausted') ||
     errorMessage.toLowerCase().includes('too many requests')
+  );
+}
+
+// Check if error is a PERMANENT daily quota exhaustion (use before marking model exhausted)
+function isPermanentQuotaError(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('check your plan') ||
+    msg.includes('billing') ||
+    msg.includes('limit: 0') ||
+    (msg.includes('per day') && !msg.includes('retry')) ||
+    msg.includes('daily quota') ||
+    msg.includes('daily limit')
   );
 }
 
@@ -239,19 +214,18 @@ async function resetKeyErrorCount(supabaseServiceClient: any, keyId: string): Pr
   }
 }
 
-function getNextApiKeyForModel(modelType: QuotaModelType): ApiKeyRecord | null {
-  const cache = modelType === 'tts' ? ttsKeyCache : flashKeyCache;
-  if (cache.length === 0) return null;
-  
-  if (modelType === 'tts') {
-    const key = ttsKeyCache[ttsKeyIndex % ttsKeyCache.length];
-    ttsKeyIndex = (ttsKeyIndex + 1) % ttsKeyCache.length;
-    return key;
-  } else {
-    const key = flashKeyCache[flashKeyIndex % flashKeyCache.length];
-    flashKeyIndex = (flashKeyIndex + 1) % flashKeyCache.length;
-    return key;
-  }
+function getNextTTSApiKey(): ApiKeyRecord | null {
+  if (ttsKeyCache.length === 0) return null;
+  const key = ttsKeyCache[ttsKeyIndex % ttsKeyCache.length];
+  ttsKeyIndex = (ttsKeyIndex + 1) % ttsKeyCache.length;
+  return key;
+}
+
+function getNextFlashApiKey(): ApiKeyRecord | null {
+  if (flashKeyCache.length === 0) return null;
+  const key = flashKeyCache[flashKeyIndex % flashKeyCache.length];
+  flashKeyIndex = (flashKeyIndex + 1) % flashKeyCache.length;
+  return key;
 }
 
 // Legacy function for backward compatibility
@@ -260,7 +234,7 @@ let currentKeyIndex = 0;
 
 function getNextApiKey(): ApiKeyRecord | null {
   if (flashKeyCache.length > 0) {
-    return getNextApiKeyForModel('flash_2_5');
+    return getNextFlashApiKey();
   }
   // Fallback to legacy cache
   if (apiKeyCache.length === 0) return null;
@@ -1985,7 +1959,7 @@ async function generateGeminiTtsDirect(
 ): Promise<{ audioBase64: string; sampleRate: number }> {
   // Ensure we have TTS API keys cached (filtered by TTS quota)
   if (ttsKeyCache.length === 0) {
-    ttsKeyCache = await getActiveGeminiKeysForModel(supabaseServiceClient, 'tts');
+    ttsKeyCache = await getActiveGeminiKeysForTTS(supabaseServiceClient);
     if (ttsKeyCache.length === 0) {
       throw new Error("No active Gemini API keys available for TTS (all may have hit quota limit)");
     }
@@ -1999,7 +1973,7 @@ async function generateGeminiTtsDirect(
   const triedKeyIds = new Set<string>();
   
   for (let i = 0; i < keysToTry; i++) {
-    const keyRecord = getNextApiKeyForModel('tts');
+    const keyRecord = getNextTTSApiKey();
     if (!keyRecord || triedKeyIds.has(keyRecord.id)) continue;
     triedKeyIds.add(keyRecord.id);
     
@@ -2028,10 +2002,13 @@ async function generateGeminiTtsDirect(
         const errorText = await resp.text();
         console.error(`Gemini TTS error with key ${keyRecord.id}:`, resp.status, errorText.slice(0, 200));
         
-        // Check if this is a quota exhaustion error
-        if (isQuotaExhaustedError(resp.status, errorText)) {
-          console.log(`Key ${keyRecord.id} hit TTS quota limit, marking as exhausted`);
-          await markKeyQuotaExhausted(supabaseServiceClient, keyRecord.id, 'tts');
+        // Check if this is a PERMANENT daily quota exhaustion (not just rate limit)
+        if (isPermanentQuotaError(errorText)) {
+          console.log(`Key ${keyRecord.id} hit permanent TTS quota limit, marking as exhausted for ${TTS_MODEL}`);
+          await markTTSQuotaExhausted(supabaseServiceClient, keyRecord.id);
+        } else if (isQuotaExhaustedError(resp.status, errorText)) {
+          // Rate limit - just log and continue to next key
+          console.log(`Key ${keyRecord.id} hit rate limit for TTS, trying next key`);
         } else {
           // Track error for this key - deactivate on auth errors
           await incrementKeyErrorCount(supabaseServiceClient, keyRecord.id, resp.status === 401 || resp.status === 403);
@@ -2071,7 +2048,7 @@ async function generateGeminiTtsMultiSpeaker(
 ): Promise<{ audioBase64: string; sampleRate: number }> {
   // Ensure we have TTS API keys cached (filtered by TTS quota)
   if (ttsKeyCache.length === 0) {
-    ttsKeyCache = await getActiveGeminiKeysForModel(supabaseServiceClient, 'tts');
+    ttsKeyCache = await getActiveGeminiKeysForTTS(supabaseServiceClient);
     if (ttsKeyCache.length === 0) {
       throw new Error("No active Gemini API keys available for TTS (all may have hit quota limit)");
     }
@@ -2089,7 +2066,7 @@ ${text}`;
   const triedKeyIds = new Set<string>();
 
   for (let i = 0; i < keysToTry; i++) {
-    const keyRecord = getNextApiKeyForModel('tts');
+    const keyRecord = getNextTTSApiKey();
     if (!keyRecord || triedKeyIds.has(keyRecord.id)) continue;
     triedKeyIds.add(keyRecord.id);
 
@@ -2131,10 +2108,13 @@ ${text}`;
           errorText.slice(0, 200)
         );
         
-        // Check if this is a quota exhaustion error
-        if (isQuotaExhaustedError(resp.status, errorText)) {
-          console.log(`Key ${keyRecord.id} hit TTS quota limit, marking as exhausted`);
-          await markKeyQuotaExhausted(supabaseServiceClient, keyRecord.id, 'tts');
+        // Check if this is a PERMANENT daily quota exhaustion (not just rate limit)
+        if (isPermanentQuotaError(errorText)) {
+          console.log(`Key ${keyRecord.id} hit permanent TTS quota limit, marking as exhausted for ${TTS_MODEL}`);
+          await markTTSQuotaExhausted(supabaseServiceClient, keyRecord.id);
+        } else if (isQuotaExhaustedError(resp.status, errorText)) {
+          // Rate limit - just log and continue to next key
+          console.log(`Key ${keyRecord.id} hit rate limit for TTS (multi-speaker), trying next key`);
         } else {
           await incrementKeyErrorCount(
             supabaseServiceClient,

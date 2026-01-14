@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { BookOpen, FileText, TrendingUp, Headphones, PenTool, Mic, Brain, Sparkles, Factory } from 'lucide-react';
+import ModelHealthOverviewCard from '@/components/admin/ModelHealthOverviewCard';
 
 interface Stats {
   readingTests: number;
@@ -112,6 +113,9 @@ export default function AdminDashboard() {
           </Card>
         ))}
       </div>
+
+      {/* Model Health Overview */}
+      <ModelHealthOverviewCard />
 
       {/* Quick Actions */}
       <Card className="border-0 shadow-lg">
