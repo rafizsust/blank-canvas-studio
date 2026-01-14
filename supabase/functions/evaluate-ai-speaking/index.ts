@@ -135,25 +135,35 @@ function classifyGeminiError(status: number, errorText: string): GeminiErrorInfo
     };
   }
   
-  // 429 is typically either quota exhaustion or rate limiting.
-  // IMPORTANT: do NOT retry the same key/model on 429 — rotate keys/models instead.
-  if (status === 429 || lower.includes('quota') || lower.includes('resource_exhausted')) {
+  // Distinguish between:
+  // - DAILY QUOTA exhaustion (should mark key exhausted for the day)
+  // - TEMPORARY rate limiting (RPM/RPS) (should retry with backoff / rotate without marking exhausted)
+  // NOTE: Gemini often returns 429 for both, so we inspect the message.
+  const isExplicitQuota =
+    lower.includes('resource_exhausted') ||
+    lower.includes('resource exhausted') ||
+    lower.includes('quota') ||
+    lower.includes('check your plan') ||
+    lower.includes('billing');
+
+  if (status === 429 && isExplicitQuota) {
     return {
       code: 'QUOTA_EXCEEDED',
       userMessage:
-        'Gemini API quota/rate limit exceeded for this key. We\'ll switch keys automatically; please retry in a bit if it persists.',
+        'Gemini daily quota for this API key is exhausted. We\'ll switch keys automatically; please try again later if it persists.',
       isQuota: true,
-      isRateLimit: true,
+      isRateLimit: false,
       isInvalidKey: false,
       isModelNotFound: false,
       isRetryable: false,
     };
   }
-  
-  if (lower.includes('rate limit') || lower.includes('too many requests')) {
+
+  // 429 without explicit quota hints is most likely temporary rate limiting.
+  if (status === 429 || lower.includes('rate limit') || lower.includes('too many requests')) {
     return {
       code: 'RATE_LIMITED',
-      userMessage: 'Too many requests to Gemini API. Please wait 30 seconds and try again.',
+      userMessage: 'Gemini is rate-limiting requests (RPM). Please wait a few seconds and retry.',
       isQuota: false,
       isRateLimit: true,
       isInvalidKey: false,
@@ -673,12 +683,21 @@ serve(async (req) => {
                 continue; // Retry same model
               }
               
-              // If using pool key and got quota/rate limit error after retries, MARK AS QUOTA EXHAUSTED
-              if (poolKeyId && (lastError.isQuota || lastError.isRateLimit)) {
+              // If using pool key and got DAILY QUOTA error after retries, MARK AS QUOTA EXHAUSTED
+              if (poolKeyId && lastError.isQuota) {
                 await markKeyQuotaExhaustedForFlash(supabaseService, poolKeyId);
                 await incrementKeyErrorCount(supabaseService, poolKeyId, false);
                 console.log(`[evaluate-ai-speaking] Key ${poolKeyId} marked as quota exhausted after ${attempt + 1} attempts, will try next key`);
                 return { success: false }; // Signal to try next pool key
+              }
+
+              // If using pool key and got RATE LIMIT after retries, DO NOT mark exhausted.
+              // Add a small backoff and rotate to reduce the chance of repeated 429s.
+              if (poolKeyId && lastError.isRateLimit) {
+                await incrementKeyErrorCount(supabaseService, poolKeyId, false);
+                await sleepWithBackoff(Math.min(attempt, 1));
+                console.log(`[evaluate-ai-speaking] Key ${poolKeyId} rate-limited after ${attempt + 1} attempts, rotating to next key`);
+                return { success: false };
               }
               
               // If invalid key in pool, deactivate it

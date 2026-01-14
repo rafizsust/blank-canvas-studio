@@ -83,21 +83,28 @@ export async function markKeyQuotaExhausted(
   }
 }
 
-// Check if an error indicates quota exhaustion (429 rate limit)
+// Check if an error indicates *daily quota exhaustion* (NOT per-minute rate limiting)
 export function isQuotaExhaustedError(error: any): boolean {
   if (!error) return false;
-  
-  const errorMessage = typeof error === 'string' ? error : (error.message || error.error?.message || '');
+
+  const errorMessage = typeof error === 'string'
+    ? error
+    : (error.message || error.error?.message || '');
   const errorStatus = error.status || error.error?.status || '';
-  
-  // Check for quota/rate limit indicators
+
+  const msg = String(errorMessage).toLowerCase();
+
+  // IMPORTANT:
+  // - 429 "Too Many Requests" is often an RPM/RPS rate limit and should NOT be treated as "daily quota exhausted".
+  // - Only treat explicit "quota" / "resource exhausted" style signals as quota exhaustion.
   return (
     errorStatus === 'RESOURCE_EXHAUSTED' ||
-    errorStatus === 429 ||
-    errorMessage.toLowerCase().includes('quota') ||
-    errorMessage.toLowerCase().includes('rate limit') ||
-    errorMessage.toLowerCase().includes('resource exhausted') ||
-    errorMessage.toLowerCase().includes('too many requests')
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('exceeded') && msg.includes('quota') ||
+    msg.includes('check your plan') ||
+    msg.includes('billing')
   );
 }
 

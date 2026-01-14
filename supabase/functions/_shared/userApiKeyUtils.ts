@@ -79,20 +79,25 @@ export async function markUserKeyQuotaExhausted(
   }
 }
 
-// Check if an error indicates quota exhaustion (429 rate limit)
+// Check if an error indicates *daily quota exhaustion* (NOT per-minute rate limiting)
 export function isQuotaExhaustedError(error: any): boolean {
   if (!error) return false;
-  
-  const errorMessage = typeof error === 'string' ? error : (error.message || error.error?.message || '');
+
+  const errorMessage = typeof error === 'string'
+    ? error
+    : (error.message || error.error?.message || '');
   const errorStatus = error.status || error.error?.status || '';
-  
+
+  const msg = String(errorMessage).toLowerCase();
+
   return (
     errorStatus === 'RESOURCE_EXHAUSTED' ||
-    errorStatus === 429 ||
-    errorMessage.toLowerCase().includes('quota') ||
-    errorMessage.toLowerCase().includes('rate limit') ||
-    errorMessage.toLowerCase().includes('resource exhausted') ||
-    errorMessage.toLowerCase().includes('too many requests')
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('exceeded') && msg.includes('quota') ||
+    msg.includes('check your plan') ||
+    msg.includes('billing')
   );
 }
 
