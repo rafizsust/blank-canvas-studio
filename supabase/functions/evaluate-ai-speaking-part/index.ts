@@ -6,6 +6,10 @@ import {
   getActiveGeminiKeysForModel, 
   markKeyQuotaExhausted
 } from "../_shared/apiKeyQuotaUtils.ts";
+import { 
+  createPerformanceLogger,
+  classifyGeminiErrorStatus
+} from "../_shared/performanceLogger.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -368,6 +372,9 @@ serve(async (req) => {
       isInvalidKey: false,
     };
     const GEMINI_TIMEOUT_MS = 90_000;
+    
+    // Create performance logger for this task
+    const perfLogger = createPerformanceLogger('evaluate_speaking');
 
     console.log(`[evaluate-ai-speaking-part] Starting Gemini API call for Part ${partNumber}`);
 
@@ -377,6 +384,7 @@ serve(async (req) => {
     async function tryGeminiWithKey(apiKey: string, keyId: string | null): Promise<boolean> {
       for (const modelName of GEMINI_MODELS_FALLBACK_ORDER) {
         console.log(`[evaluate-ai-speaking-part] Attempting model: ${modelName}`);
+        const modelCallStart = Date.now();
         const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
         try {
@@ -410,9 +418,13 @@ serve(async (req) => {
             // Handle pool key errors
             if (keyId) {
               if (errorInfo.isInvalidKey) {
+                const modelCallEnd = Date.now() - modelCallStart;
+                await perfLogger.logError(modelName, errorText.slice(0, 200), modelCallEnd, keyId);
                 await incrementKeyErrorCount(supabaseServiceClient, keyId, true);
                 return false; // Try next pool key
               } else if (errorInfo.isQuota || errorInfo.isRateLimit) {
+                const modelCallEnd = Date.now() - modelCallStart;
+                await perfLogger.logQuotaExceeded(modelName, errorText.slice(0, 200), keyId);
                 // Mark this key as quota exhausted for flash_2_5 model - prevents reuse today
                 await markKeyQuotaExhausted(supabaseServiceClient, keyId, 'flash_2_5');
                 await incrementKeyErrorCount(supabaseServiceClient, keyId);
@@ -450,6 +462,11 @@ serve(async (req) => {
           evaluationRaw = parseJsonFromResponse(responseText);
           if (evaluationRaw) {
             usedModel = modelName;
+            const modelCallEnd = Date.now() - modelCallStart;
+            
+            // Log successful performance
+            await perfLogger.logSuccess(modelName, modelCallEnd, keyId ?? undefined);
+            
             console.log(`[evaluate-ai-speaking-part] Successfully evaluated Part ${partNumber} with model: ${modelName}`);
             
             // Reset error count on success for pool keys
@@ -459,10 +476,13 @@ serve(async (req) => {
             return true;
           }
         } catch (err: any) {
+          const modelCallEnd = Date.now() - modelCallStart;
           if (err.name === 'AbortError') {
             console.error(`[evaluate-ai-speaking-part] Timeout with model ${modelName}`);
+            await perfLogger.logError(modelName, 'Request timed out', modelCallEnd, keyId ?? undefined);
           } else {
             console.error(`[evaluate-ai-speaking-part] Error with model ${modelName}:`, err.message);
+            await perfLogger.logError(modelName, err.message ?? 'Unknown error', modelCallEnd, keyId ?? undefined);
           }
           continue;
         }

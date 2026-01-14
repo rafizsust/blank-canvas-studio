@@ -7,6 +7,10 @@ import {
   getTodayDate,
   ALL_MODEL_QUOTA_COLUMNS
 } from "../_shared/apiKeyQuotaUtils.ts";
+import { 
+  createPerformanceLogger,
+  classifyGeminiErrorStatus
+} from "../_shared/performanceLogger.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1008,7 +1012,7 @@ function getQuestionTypesForModule(module: string, selectedType: string): string
   }
 }
 
-// Generate content using Lovable AI Gateway
+// Generate content using Lovable AI Gateway with performance logging
 async function generateContent(
   module: string,
   topic: string,
@@ -1025,55 +1029,92 @@ async function generateContent(
   }
 
   const prompt = getPromptForModule(module, topic, difficulty, questionType, monologue, voiceName, writingConfig);
-
-  const response = await fetchWithTimeout(
-    "https://ai.gateway.lovable.dev/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert IELTS test creator. Generate high-quality, authentic exam content. Always respond with valid JSON only, no markdown code blocks.",
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-    },
-    90_000
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AI generation failed: ${response.status} - ${errorText.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-  const contentText = data.choices?.[0]?.message?.content;
-
-  if (!contentText) {
-    throw new Error("Empty AI response");
-  }
-
-  // Parse JSON from response
-  let jsonContent = contentText;
-  if (contentText.includes("```json")) {
-    jsonContent = contentText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
-  } else if (contentText.includes("```")) {
-    jsonContent = contentText.replace(/```\n?/g, "");
-  }
+  
+  // Create performance logger for this task
+  const perfLogger = createPerformanceLogger('generate');
+  const modelName = "google/gemini-2.5-flash";
+  const callStart = Date.now();
 
   try {
-    return JSON.parse(jsonContent.trim());
-  } catch (parseError) {
-    console.error("JSON parse error:", parseError, "Content:", jsonContent.slice(0, 500));
-    throw new Error("Failed to parse AI response as JSON");
+    const response = await fetchWithTimeout(
+      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are an expert IELTS test creator. Generate high-quality, authentic exam content. Always respond with valid JSON only, no markdown code blocks.",
+            },
+            { role: "user", content: prompt },
+          ],
+        }),
+      },
+      90_000
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const callEnd = Date.now() - callStart;
+      
+      // Log appropriate error type
+      const isQuota = response.status === 429 || 
+                      errorText.toLowerCase().includes('quota') ||
+                      errorText.toLowerCase().includes('resource_exhausted');
+      
+      if (isQuota) {
+        await perfLogger.logQuotaExceeded(modelName, errorText.slice(0, 200));
+      } else {
+        await perfLogger.logError(modelName, `HTTP ${response.status}: ${errorText.slice(0, 100)}`, callEnd);
+      }
+      
+      throw new Error(`AI generation failed: ${response.status} - ${errorText.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const contentText = data.choices?.[0]?.message?.content;
+
+    if (!contentText) {
+      const callEnd = Date.now() - callStart;
+      await perfLogger.logError(modelName, 'Empty AI response', callEnd);
+      throw new Error("Empty AI response");
+    }
+
+    // Parse JSON from response
+    let jsonContent = contentText;
+    if (contentText.includes("```json")) {
+      jsonContent = contentText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
+    } else if (contentText.includes("```")) {
+      jsonContent = contentText.replace(/```\n?/g, "");
+    }
+
+    try {
+      const result = JSON.parse(jsonContent.trim());
+      
+      // Log success
+      const callEnd = Date.now() - callStart;
+      await perfLogger.logSuccess(modelName, callEnd);
+      
+      return result;
+    } catch (parseError) {
+      const callEnd = Date.now() - callStart;
+      await perfLogger.logError(modelName, 'JSON parse failed', callEnd);
+      console.error("JSON parse error:", parseError, "Content:", jsonContent.slice(0, 500));
+      throw new Error("Failed to parse AI response as JSON");
+    }
+  } catch (err) {
+    // If error wasn't already logged, log it now
+    if (err instanceof Error && !err.message.includes('AI generation failed') && !err.message.includes('Empty AI response') && !err.message.includes('Failed to parse')) {
+      const callEnd = Date.now() - callStart;
+      await perfLogger.logError(modelName, err.message, callEnd);
+    }
+    throw err;
   }
 }
 

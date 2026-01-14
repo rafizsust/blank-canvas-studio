@@ -2,6 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { 
+  createPerformanceLogger,
+  classifyGeminiErrorStatus
+} from "../_shared/performanceLogger.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -491,7 +495,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Enhanced callGemini with DB key rotation support
+// Enhanced callGemini with DB key rotation support and performance logging
 // If dbKeys array is provided, will rotate through them on 429/403 errors
 async function callGemini(
   apiKey: string, 
@@ -506,6 +510,9 @@ async function callGemini(
   lastGeminiError = null;
   lastTokensUsed = 0;
   isQuotaExceeded = false;
+  
+  // Create performance logger for this task
+  const perfLogger = createPerformanceLogger('generate');
   
   const dbKeys = options?.dbKeys || [];
   const serviceClient = options?.serviceClient;
@@ -522,6 +529,7 @@ async function callGemini(
   
   for (const model of GEMINI_MODELS) {
     let retryCount = 0;
+    const modelCallStart = Date.now();
     
     while (retryCount <= maxRetries) {
       try {
@@ -559,6 +567,10 @@ async function callGemini(
               errorMessage.toLowerCase().includes('daily') ||
               errorMessage.toLowerCase().includes('per day') ||
               (errorMessage.toLowerCase().includes('quota') && !errorMessage.toLowerCase().includes('per minute'));
+            
+            // Log quota exceeded
+            const modelCallEnd = Date.now() - modelCallStart;
+            await perfLogger.logQuotaExceeded(model, errorMessage.slice(0, 200), currentKeyRecord?.id);
             
             // Key rotation: try next DB key if available
             if (dbKeys.length > 0 && currentKeyIndex < dbKeys.length - 1) {
@@ -605,6 +617,9 @@ async function callGemini(
             break;
           } else if (response.status === 403 || errorStatus === 'PERMISSION_DENIED') {
             // Key is invalid - try next DB key
+            const modelCallEnd = Date.now() - modelCallStart;
+            await perfLogger.logError(model, 'Permission denied', modelCallEnd, currentKeyRecord?.id);
+            
             if (dbKeys.length > 0 && currentKeyIndex < dbKeys.length - 1) {
               console.log(`Key ${currentKeyIndex + 1} permission denied, rotating to next key...`);
               
@@ -623,6 +638,8 @@ async function callGemini(
             lastGeminiError = 'API access denied. Please verify your Gemini API key is valid and has the correct permissions.';
             break;
           } else if (response.status === 400) {
+            const modelCallEnd = Date.now() - modelCallStart;
+            await perfLogger.logError(model, 'Invalid request', modelCallEnd, currentKeyRecord?.id);
             lastGeminiError = 'Invalid request to AI. The generation request was rejected. Please try again with different settings.';
             break;
           } else if (response.status >= 500) {
@@ -632,6 +649,8 @@ async function callGemini(
               retryCount++;
               continue;
             }
+            const modelCallEnd = Date.now() - modelCallStart;
+            await perfLogger.logError(model, `Server error ${response.status}: ${errorMessage.slice(0, 100)}`, modelCallEnd, currentKeyRecord?.id);
             lastGeminiError = `AI service error (${response.status}): ${errorMessage.slice(0, 100)}`;
           } else {
             lastGeminiError = `AI service error (${response.status}): ${errorMessage.slice(0, 100)}`;
@@ -654,6 +673,10 @@ async function callGemini(
         if (text) {
           console.log(`Success with ${model}`);
           
+          // Log successful performance
+          const modelCallEnd = Date.now() - modelCallStart;
+          await perfLogger.logSuccess(model, modelCallEnd, currentKeyRecord?.id);
+          
           // Reset error count on success
           if (serviceClient && currentKeyRecord) {
             await resetKeyErrorCount(serviceClient, currentKeyRecord.id);
@@ -662,15 +685,20 @@ async function callGemini(
           return text;
         } else {
           const finishReason = data.candidates?.[0]?.finishReason;
+          const modelCallEnd = Date.now() - modelCallStart;
           if (finishReason === 'SAFETY') {
+            await perfLogger.logError(model, 'Content filtered by safety settings', modelCallEnd, currentKeyRecord?.id);
             lastGeminiError = 'Content was filtered by safety settings. Please try a different topic.';
           } else {
+            await perfLogger.logError(model, 'Empty response from AI', modelCallEnd, currentKeyRecord?.id);
             lastGeminiError = 'AI returned empty response. Please try again.';
           }
         }
         break;
       } catch (err) {
         console.error(`Error with ${model}:`, err);
+        const modelCallEnd = Date.now() - modelCallStart;
+        await perfLogger.logError(model, err instanceof Error ? err.message : 'Unknown error', modelCallEnd, currentKeyRecord?.id);
         
         if (retryCount < maxRetries) {
           console.log(`Connection error on ${model}, will retry after backoff...`);

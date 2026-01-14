@@ -8,6 +8,10 @@ import {
   isQuotaExhaustedError,
   type QuotaModelType
 } from "../_shared/apiKeyQuotaUtils.ts";
+import { 
+  createPerformanceLogger,
+  classifyGeminiErrorStatus
+} from "../_shared/performanceLogger.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -633,6 +637,9 @@ serve(async (req) => {
     let usedModel: string | null = null;
     let lastError: GeminiErrorInfo | null = null;
     const GEMINI_TIMEOUT_MS = 120_000; // 2 minutes timeout for large audio payloads
+    
+    // Create performance logger for this task (creates its own service client)
+    const perfLogger = createPerformanceLogger('evaluate_speaking');
 
     console.log(`[evaluate-ai-speaking] Starting Gemini API call, timeout: ${GEMINI_TIMEOUT_MS}ms, using ${usingUserKey ? 'user key' : 'pool key'}`);
 
@@ -640,6 +647,7 @@ serve(async (req) => {
     async function callGemini(apiKey: string, poolKeyId?: string): Promise<{ success: boolean; shouldFallbackToPool?: boolean }> {
       for (const modelName of GEMINI_MODELS_FALLBACK_ORDER) {
         console.log(`[evaluate-ai-speaking] Attempting model: ${modelName}`);
+        const modelCallStart = Date.now();
         const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
         // Retry loop with exponential backoff for retryable errors
@@ -685,6 +693,8 @@ serve(async (req) => {
               
               // If using pool key and got DAILY QUOTA error after retries, MARK AS QUOTA EXHAUSTED
               if (poolKeyId && lastError.isQuota) {
+                const modelCallEnd = Date.now() - modelCallStart;
+                await perfLogger.logQuotaExceeded(modelName, errorText.slice(0, 200), poolKeyId);
                 await markKeyQuotaExhaustedForFlash(supabaseService, poolKeyId);
                 await incrementKeyErrorCount(supabaseService, poolKeyId, false);
                 console.log(`[evaluate-ai-speaking] Key ${poolKeyId} marked as quota exhausted after ${attempt + 1} attempts, will try next key`);
@@ -734,6 +744,11 @@ serve(async (req) => {
             evaluationRaw = parseJsonFromResponse(responseText);
             if (evaluationRaw) {
               usedModel = modelName;
+              const modelCallEnd = Date.now() - modelCallStart;
+              
+              // Log successful performance
+              await perfLogger.logSuccess(modelName, modelCallEnd, poolKeyId);
+              
               // Reset error count on success for pool keys
               if (poolKeyId) {
                 await resetKeyErrorCount(supabaseService, poolKeyId);
@@ -743,8 +758,10 @@ serve(async (req) => {
             }
             break; // No valid JSON, try next model
           } catch (err: any) {
+            const modelCallEnd = Date.now() - modelCallStart;
             if (err.name === 'AbortError') {
               console.error(`[evaluate-ai-speaking] Timeout with model ${modelName} (attempt ${attempt + 1})`);
+              await perfLogger.logError(modelName, 'Request timed out', modelCallEnd, poolKeyId);
               lastError = { code: 'TIMEOUT', userMessage: 'Request timed out. Please try again.', isQuota: false, isRateLimit: false, isInvalidKey: false, isModelNotFound: false, isRetryable: true };
               
               // Retry timeout with backoff
