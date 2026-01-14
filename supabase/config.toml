@@ -1,7 +1,1 @@
 project_id = "jtfbocwsfxwrzfzvzgja"
-
-[functions.evaluate-speaking-async]
-verify_jwt = false
-
-[functions.process-speaking-job]
-verify_jwt = false
