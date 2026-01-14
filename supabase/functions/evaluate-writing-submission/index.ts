@@ -125,10 +125,15 @@ async function refundCredits(
   }
 }
 
-// List of Gemini models in fallback order - gemini-2.5-flash as primary, gemini-2.0-flash as fallback
+// =============================================================================
+// THE CRITIC - Writing Evaluation Models (Split-Brain Architecture)
+// =============================================================================
+// Prioritize "Deep Reasoning" models for essay grading
+// These models excel at nuanced grammar, coherence, and argument analysis
 const GEMINI_MODELS_FALLBACK_ORDER = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
+  'gemini-3-pro-preview', // 1. Primary: Maximum IQ for Grammar/Coherence (Gemini 3.0)
+  'gemini-exp-1206',      // 2. Secondary: High Quality Experimental
+  'gemini-2.5-pro',       // 3. Fallback: Stable Pro model
 ];
 
 serve(async (req) => {

@@ -234,10 +234,15 @@ CRITICAL - VOICE-GENDER SYNCHRONIZATION:
   return constraint;
 }
 
-// Gemini models for IELTS text generation - gemini-2.5-flash as primary, gemini-2.0-flash as fallback
+// =============================================================================
+// THE ARCHITECT - Test Generation Models (Split-Brain Architecture)
+// =============================================================================
+// Prioritize instruction-following models for complex JSON generation
+// These models excel at adhering to strict formatting rules and producing valid JSON
 const GEMINI_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
+  'gemini-exp-1206',      // 1. Primary: Best adherence to complex JSON rules (Free Pro class)
+  'gemini-2.0-flash-exp', // 2. Secondary: Strong reasoning, experimental
+  'gemini-2.5-flash',     // 3. Fallback: Standard stable model
 ];
 
 // Store last error for better error messages

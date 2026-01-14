@@ -34,8 +34,16 @@ async function decryptApiKey(encryptedValue: string, encryptionKey: string): Pro
   return decoder.decode(decryptedData);
 }
 
-// Gemini models to try (with fallback)
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+// =============================================================================
+// THE TUTOR - Follow-up Chat Models (Split-Brain Architecture)
+// =============================================================================
+// Prioritize speed and high-quota models for instant chat responses
+// These models have faster response times and higher daily quotas
+const GEMINI_MODELS = [
+  'gemini-2.0-flash-lite-preview-02-05', // 1. Primary: Instant speed, 1500 daily quota
+  'gemini-2.0-flash-lite',               // 2. Secondary: Stable Lite model
+  'gemini-2.0-flash',                    // 3. Fallback: Low latency standard
+];
 
 async function callGemini(apiKey: string, prompt: string): Promise<string | null> {
   for (const model of GEMINI_MODELS) {

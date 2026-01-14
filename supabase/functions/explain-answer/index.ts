@@ -34,7 +34,16 @@ async function decryptApiKey(encryptedValue: string, encryptionKey: string): Pro
   return decoder.decode(decryptedData);
 }
 
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+// =============================================================================
+// THE TUTOR - Answer Explanation Models (Split-Brain Architecture)
+// =============================================================================
+// Prioritize speed and high-quota models for instant explanations
+// These models have faster response times and higher daily quotas
+const GEMINI_MODELS = [
+  'gemini-2.0-flash-lite-preview-02-05', // 1. Primary: Instant speed, 1500 daily quota
+  'gemini-2.0-flash-lite',               // 2. Secondary: Stable Lite model
+  'gemini-2.0-flash',                    // 3. Fallback: Low latency standard
+];
 
 async function callGemini(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string | null> {
   for (const model of GEMINI_MODELS) {

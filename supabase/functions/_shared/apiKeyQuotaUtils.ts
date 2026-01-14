@@ -1,6 +1,12 @@
 // Shared utility for API key quota management
-// Model types that can hit quota limits
-export type QuotaModelType = 'tts' | 'flash_2_5';
+// Model types that can hit quota limits - Split-Brain Architecture
+// Each feature uses a dedicated model category to prevent quota contamination
+export type QuotaModelType = 
+  | 'tts'           // Text-to-speech generation
+  | 'flash_2_5'     // Standard flash models (gemini-2.5-flash, gemini-2.0-flash)
+  | 'flash_lite'    // Speed-optimized lite models (gemini-2.0-flash-lite, tutor/explainer)
+  | 'pro_3_0'       // Deep reasoning models (gemini-3-pro-preview, writing evaluation)
+  | 'exp_pro';      // Experimental pro models (gemini-exp-1206, test generation)
 
 interface ApiKeyRecord {
   id: string;
@@ -12,6 +18,12 @@ interface ApiKeyRecord {
   tts_quota_exhausted_date?: string;
   flash_2_5_quota_exhausted?: boolean;
   flash_2_5_quota_exhausted_date?: string;
+  flash_lite_quota_exhausted?: boolean;
+  flash_lite_quota_exhausted_date?: string;
+  pro_3_0_quota_exhausted?: boolean;
+  pro_3_0_quota_exhausted_date?: string;
+  exp_pro_quota_exhausted?: boolean;
+  exp_pro_quota_exhausted_date?: string;
 }
 
 // Get today's date in YYYY-MM-DD format
@@ -25,6 +37,23 @@ export function isQuotaExhaustedToday(exhaustedDate: string | null | undefined):
   return exhaustedDate === getTodayDate();
 }
 
+// Get the quota field names for a given model type
+function getQuotaFieldNames(modelType: QuotaModelType): { quotaField: string; quotaDateField: string } {
+  switch (modelType) {
+    case 'tts':
+      return { quotaField: 'tts_quota_exhausted', quotaDateField: 'tts_quota_exhausted_date' };
+    case 'flash_lite':
+      return { quotaField: 'flash_lite_quota_exhausted', quotaDateField: 'flash_lite_quota_exhausted_date' };
+    case 'pro_3_0':
+      return { quotaField: 'pro_3_0_quota_exhausted', quotaDateField: 'pro_3_0_quota_exhausted_date' };
+    case 'exp_pro':
+      return { quotaField: 'exp_pro_quota_exhausted', quotaDateField: 'exp_pro_quota_exhausted_date' };
+    case 'flash_2_5':
+    default:
+      return { quotaField: 'flash_2_5_quota_exhausted', quotaDateField: 'flash_2_5_quota_exhausted_date' };
+  }
+}
+
 // Fetch active Gemini keys that are not quota-exhausted for the specified model type
 export async function getActiveGeminiKeysForModel(
   supabaseServiceClient: any,
@@ -32,8 +61,7 @@ export async function getActiveGeminiKeysForModel(
 ): Promise<ApiKeyRecord[]> {
   try {
     const today = getTodayDate();
-    const quotaField = modelType === 'tts' ? 'tts_quota_exhausted' : 'flash_2_5_quota_exhausted';
-    const quotaDateField = modelType === 'tts' ? 'tts_quota_exhausted_date' : 'flash_2_5_quota_exhausted_date';
+    const { quotaField, quotaDateField } = getQuotaFieldNames(modelType);
     
     // First, reset any quotas from previous days
     await supabaseServiceClient.rpc('reset_api_key_quotas');
@@ -41,7 +69,7 @@ export async function getActiveGeminiKeysForModel(
     // Fetch keys that are active and not quota-exhausted for today
     const { data, error } = await supabaseServiceClient
       .from('api_keys')
-      .select('id, provider, key_value, is_active, error_count, tts_quota_exhausted, tts_quota_exhausted_date, flash_2_5_quota_exhausted, flash_2_5_quota_exhausted_date')
+      .select('id, provider, key_value, is_active, error_count, tts_quota_exhausted, tts_quota_exhausted_date, flash_2_5_quota_exhausted, flash_2_5_quota_exhausted_date, flash_lite_quota_exhausted, flash_lite_quota_exhausted_date, pro_3_0_quota_exhausted, pro_3_0_quota_exhausted_date, exp_pro_quota_exhausted, exp_pro_quota_exhausted_date')
       .eq('provider', 'gemini')
       .eq('is_active', true)
       .or(`${quotaField}.is.null,${quotaField}.eq.false,${quotaDateField}.lt.${today}`)
@@ -68,9 +96,13 @@ export async function markKeyQuotaExhausted(
 ): Promise<void> {
   try {
     const today = getTodayDate();
-    const updateData = modelType === 'tts' 
-      ? { tts_quota_exhausted: true, tts_quota_exhausted_date: today, updated_at: new Date().toISOString() }
-      : { flash_2_5_quota_exhausted: true, flash_2_5_quota_exhausted_date: today, updated_at: new Date().toISOString() };
+    const { quotaField, quotaDateField } = getQuotaFieldNames(modelType);
+    
+    const updateData: Record<string, any> = {
+      [quotaField]: true,
+      [quotaDateField]: today,
+      updated_at: new Date().toISOString()
+    };
     
     await supabaseServiceClient
       .from('api_keys')
@@ -117,13 +149,15 @@ export async function resetKeyQuota(
   try {
     const updateData: any = { updated_at: new Date().toISOString() };
     
-    if (!modelType || modelType === 'tts') {
-      updateData.tts_quota_exhausted = false;
-      updateData.tts_quota_exhausted_date = null;
-    }
-    if (!modelType || modelType === 'flash_2_5') {
-      updateData.flash_2_5_quota_exhausted = false;
-      updateData.flash_2_5_quota_exhausted_date = null;
+    // Reset all quota types if no specific type is provided
+    const typesToReset: QuotaModelType[] = modelType 
+      ? [modelType] 
+      : ['tts', 'flash_2_5', 'flash_lite', 'pro_3_0', 'exp_pro'];
+    
+    for (const type of typesToReset) {
+      const { quotaField, quotaDateField } = getQuotaFieldNames(type);
+      updateData[quotaField] = false;
+      updateData[quotaDateField] = null;
     }
     
     await supabaseServiceClient

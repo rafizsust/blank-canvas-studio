@@ -26,7 +26,16 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+// =============================================================================
+// THE LISTENER - Speaking Evaluation Models (Split-Brain Architecture)
+// =============================================================================
+// Prioritize stable native audio models for speech analysis
+// These models have proven audio processing capabilities
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',                    // 1. Primary: Best Audio Stability
+  'gemini-2.0-flash-lite-preview-02-05', // 2. Backup: High Quota Audio
+  'gemini-2.5-flash',                    // 3. Last Resort: Standard stable
+];
 const HEARTBEAT_INTERVAL_MS = 15000; // 15 seconds
 const LOCK_DURATION_MINUTES = 5;
 const AI_CALL_TIMEOUT_MS = 90000; // 90 seconds per part (shorter since we're doing smaller chunks)
