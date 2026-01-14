@@ -556,6 +556,34 @@ serve(async (req) => {
       })
       .eq('id', jobId);
 
+    // CLEANUP: Cancel all other pending/processing jobs for the same test
+    // This prevents stale jobs from showing in the UI after successful completion
+    const { data: staleJobs } = await supabaseService
+      .from('speaking_evaluation_jobs')
+      .select('id')
+      .eq('test_id', test_id)
+      .eq('user_id', userId)
+      .neq('id', jobId)
+      .in('status', ['pending', 'processing']);
+
+    if (staleJobs && staleJobs.length > 0) {
+      console.log(`[speaking-evaluate-job] Cancelling ${staleJobs.length} stale jobs for test ${test_id}`);
+      await supabaseService
+        .from('speaking_evaluation_jobs')
+        .update({
+          status: 'failed',
+          stage: 'cancelled',
+          last_error: 'Superseded by successful evaluation',
+          lock_token: null,
+          lock_expires_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('test_id', test_id)
+        .eq('user_id', userId)
+        .neq('id', jobId)
+        .in('status', ['pending', 'processing']);
+    }
+
     console.log(`[speaking-evaluate-job] Complete, band: ${overallBand}, result_id: ${resultRow?.id}`);
 
     return new Response(JSON.stringify({ 
@@ -712,16 +740,30 @@ OUTPUT JSON SCHEMA
       "partNumber": ${partNumber},
       "questionNumber": 1,
       "question": "...",
-      "candidateResponse": "EXACT transcript",
+      "candidateResponse": "EXACT transcript from audio",
       "estimatedBand": 5.5,
-      "targetBand": 6.5,
-      "modelAnswer": "Band 7-8 model response...",
+      "targetBand": 6,
+      "modelAnswer": "Model response written at EXACTLY the targetBand level",
       "whyItWorks": ["reason1", "reason2"],
-      "keyImprovements": ["improvement1", "improvement2"]
+      "keyImprovements": ["what the candidate should do to reach this level"]
     }
   ],
   "lexical_upgrades": [{"original": "good", "upgraded": "beneficial", "context": "..."}]
 }
+
+══════════════════════════════════════════════════════════════
+TARGET BAND CALCULATION RULES
+══════════════════════════════════════════════════════════════
+
+For each question's modelAnswer, set targetBand as follows:
+- estimatedBand 1-4.5 → targetBand = 5
+- estimatedBand 5-5.5 → targetBand = 6
+- estimatedBand 6-6.5 → targetBand = 7
+- estimatedBand 7-7.5 → targetBand = 8
+- estimatedBand 8+ → targetBand = 9
+
+CRITICAL: Write the modelAnswer at EXACTLY the targetBand level, NOT higher!
+If targetBand is 6, write a Band 6 answer (not Band 7 or 8).
 
 Return EXACTLY ${numQ} transcripts and ${numQ} modelAnswers.`;
 }

@@ -252,7 +252,7 @@ export default function AIPracticeHistory() {
     if (!user) return;
     
     try {
-      // Load tests with a safe limit to prevent infinite loading
+      // Load tests - we'll sort client-side after getting results to order by most recent activity
       const { data: testsData, error: testsError } = await supabase
         .from('ai_practice_tests')
         .select('*')
@@ -261,7 +261,6 @@ export default function AIPracticeHistory() {
         .limit(100); // Safe limit to prevent massive queries
 
       if (testsError) throw testsError;
-      setTests(testsData || []);
 
       // Load results for these tests (batch in chunks to avoid massive IN queries)
       if (testsData && testsData.length > 0) {
@@ -289,6 +288,19 @@ export default function AIPracticeHistory() {
         }
         
         setTestResults(resultsMap);
+
+        // Sort tests by most recent activity: result completion time OR test generation time
+        const sortedTests = [...testsData].sort((a, b) => {
+          const aResult = resultsMap[a.id];
+          const bResult = resultsMap[b.id];
+          // Use result completion time if available, otherwise use test generation time
+          const aTime = aResult?.completed_at ? new Date(aResult.completed_at).getTime() : new Date(a.generated_at).getTime();
+          const bTime = bResult?.completed_at ? new Date(bResult.completed_at).getTime() : new Date(b.generated_at).getTime();
+          return bTime - aTime; // Descending order (newest first)
+        });
+        setTests(sortedTests);
+      } else {
+        setTests(testsData || []);
       }
     } catch (err: any) {
       console.error('Failed to load tests:', err);
