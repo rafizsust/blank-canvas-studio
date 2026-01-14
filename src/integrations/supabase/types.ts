@@ -181,11 +181,17 @@ export type Database = {
         Row: {
           created_at: string
           error_count: number
+          exp_pro_quota_exhausted: boolean | null
+          exp_pro_quota_exhausted_date: string | null
           flash_2_5_quota_exhausted: boolean | null
           flash_2_5_quota_exhausted_date: string | null
+          flash_lite_quota_exhausted: boolean | null
+          flash_lite_quota_exhausted_date: string | null
           id: string
           is_active: boolean
           key_value: string
+          pro_3_0_quota_exhausted: boolean | null
+          pro_3_0_quota_exhausted_date: string | null
           provider: string
           tts_quota_exhausted: boolean | null
           tts_quota_exhausted_date: string | null
@@ -194,11 +200,17 @@ export type Database = {
         Insert: {
           created_at?: string
           error_count?: number
+          exp_pro_quota_exhausted?: boolean | null
+          exp_pro_quota_exhausted_date?: string | null
           flash_2_5_quota_exhausted?: boolean | null
           flash_2_5_quota_exhausted_date?: string | null
+          flash_lite_quota_exhausted?: boolean | null
+          flash_lite_quota_exhausted_date?: string | null
           id?: string
           is_active?: boolean
           key_value: string
+          pro_3_0_quota_exhausted?: boolean | null
+          pro_3_0_quota_exhausted_date?: string | null
           provider: string
           tts_quota_exhausted?: boolean | null
           tts_quota_exhausted_date?: string | null
@@ -207,11 +219,17 @@ export type Database = {
         Update: {
           created_at?: string
           error_count?: number
+          exp_pro_quota_exhausted?: boolean | null
+          exp_pro_quota_exhausted_date?: string | null
           flash_2_5_quota_exhausted?: boolean | null
           flash_2_5_quota_exhausted_date?: string | null
+          flash_lite_quota_exhausted?: boolean | null
+          flash_lite_quota_exhausted_date?: string | null
           id?: string
           is_active?: boolean
           key_value?: string
+          pro_3_0_quota_exhausted?: boolean | null
+          pro_3_0_quota_exhausted_date?: string | null
           provider?: string
           tts_quota_exhausted?: boolean | null
           tts_quota_exhausted_date?: string | null
