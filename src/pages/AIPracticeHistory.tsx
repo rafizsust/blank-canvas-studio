@@ -126,6 +126,20 @@ export default function AIPracticeHistory() {
 
           // If the user already has a newer result saved, ignore late/stale failures from older attempts.
           if (job.status === 'failed' && hasNewerResult(job.test_id, job.created_at)) {
+            // Also remove this job from pending if it exists
+            setPendingEvaluations((prev) => {
+              if (prev.has(job.test_id)) {
+                const updated = new Map(prev);
+                updated.delete(job.test_id);
+                return updated;
+              }
+              return prev;
+            });
+            return;
+          }
+          
+          // If the job was cancelled due to a new submission, ignore it entirely
+          if (job.status === 'failed' && job.last_error?.includes('Cancelled:')) {
             return;
           }
 
@@ -196,11 +210,13 @@ export default function AIPracticeHistory() {
     if (!user) return;
 
     try {
+      // Only load jobs that are actually pending or processing (not failed/completed)
+      // and exclude cancelled jobs
       const { data: jobs } = await supabase
         .from('speaking_evaluation_jobs')
         .select('id, test_id, status, created_at, updated_at, last_error, retry_count, max_retries')
         .eq('user_id', user.id)
-        .in('status', ['pending', 'processing', 'stale', 'retrying', 'failed'])
+        .in('status', ['pending', 'processing'])
         .order('created_at', { ascending: false });
 
       if (jobs && jobs.length > 0) {
@@ -208,7 +224,11 @@ export default function AIPracticeHistory() {
         // Jobs are ordered newest-first, so first seen per test_id is the latest.
         jobs.forEach((job) => {
           if (!pendingMap.has(job.test_id)) {
-            // If a newer result exists, ignore old failed/pending entries.
+            // Skip cancelled jobs
+            if (job.last_error?.includes('Cancelled:')) {
+              return;
+            }
+            // If a newer result exists, ignore old pending entries.
             const r = testResults[job.test_id];
             if (r?.completed_at && new Date(r.completed_at).getTime() >= new Date(job.created_at).getTime()) {
               return;
@@ -217,6 +237,8 @@ export default function AIPracticeHistory() {
           }
         });
         setPendingEvaluations(pendingMap);
+      } else {
+        setPendingEvaluations(new Map());
       }
     } catch (err) {
       console.error('Failed to load pending evaluations:', err);
