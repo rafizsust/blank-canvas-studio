@@ -139,7 +139,7 @@ serve(async (req) => {
       });
     }
 
-    // Claim the job
+    // Claim the job - we'll set total_parts dynamically after analyzing segments
     const { data: updatedJobs, error: claimError } = await supabaseService
       .from('speaking_evaluation_jobs')
       .update({
@@ -150,7 +150,7 @@ serve(async (req) => {
         heartbeat_at: new Date().toISOString(),
         progress: existingJob.progress || 0,
         current_part: existingJob.current_part || 0,
-        total_parts: 3,
+        // total_parts will be updated after we analyze segments
         updated_at: new Date().toISOString(),
       })
       .eq('id', jobId)
@@ -260,6 +260,20 @@ serve(async (req) => {
       segmentsByPart[partNum].sort((a, b) => a.questionNumber - b.questionNumber);
     }
 
+    // Calculate actual total parts (parts that have segments)
+    const actualTotalParts = [1, 2, 3].filter(p => segmentsByPart[p].length > 0).length;
+    console.log(`[speaking-evaluate-job] Actual total parts with segments: ${actualTotalParts}`);
+
+    // Update total_parts to reflect actual submitted parts
+    await supabaseService
+      .from('speaking_evaluation_jobs')
+      .update({ 
+        total_parts: actualTotalParts,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', jobId)
+      .eq('lock_token', lockToken);
+
     // Build API key queue
     interface KeyCandidate { key: string; keyId: string | null; isUserProvided: boolean; }
     const keyQueue: KeyCandidate[] = [];
@@ -309,12 +323,16 @@ serve(async (req) => {
       const segments = segmentsByPart[partToProcess];
       console.log(`[speaking-evaluate-job] Processing Part ${partToProcess} with ${segments.length} segments`);
 
+      // Calculate progress based on actual total parts, not hardcoded 3
+      const completedParts = actualTotalParts - partsToEvaluate.length;
+      const progressPercent = actualTotalParts > 0 ? Math.round((completedParts / actualTotalParts) * 100) : 0;
+
       // Update progress before starting
       await supabaseService
         .from('speaking_evaluation_jobs')
         .update({ 
           current_part: partToProcess,
-          progress: Math.round(((3 - partsToEvaluate.length) / 3) * 100),
+          progress: progressPercent,
           updated_at: new Date().toISOString(),
         })
         .eq('id', jobId)

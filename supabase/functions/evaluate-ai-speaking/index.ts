@@ -1233,36 +1233,71 @@ function normalizeEvaluationResponse(data: any): any {
   const minimalResponseCount = data.minimalResponseCount ?? data.minimal_response_count ?? 0;
   const totalQuestionCount = data.totalQuestionCount ?? data.total_question_count ?? questionScores.length;
 
-  // Calculate the overall band based on question scores if provided
-  let overallBand = data.overallBand ?? data.overall_band ?? 0;
+  // Extract criterion scores from Gemini response
+  const fluencyScore = data.fluencyCoherence?.score ?? data.fluency_coherence?.score ?? 0;
+  const lexicalScore = data.lexicalResource?.score ?? data.lexical_resource?.score ?? 0;
+  const grammaticalScore = data.grammaticalRange?.score ?? data.grammatical_range?.score ?? 0;
+  const pronunciationScore = data.pronunciation?.score ?? 0;
   
-  // VALIDATION: If we have question scores, verify the overall band makes sense
+  // RECALCULATE overall band from criterion scores (arithmetic mean, rounded to nearest 0.5)
+  // This ensures we don't trust Gemini's potentially inflated overall band
+  const criterionScores = [fluencyScore, lexicalScore, grammaticalScore, pronunciationScore].filter(s => s > 0);
+  let calculatedOverallBand = criterionScores.length > 0
+    ? Math.round((criterionScores.reduce((a, b) => a + b, 0) / criterionScores.length) * 2) / 2
+    : (data.overallBand ?? data.overall_band ?? 0);
+  
+  // If we have question scores, use them as an additional validation layer
+  let overallBand = calculatedOverallBand;
+  
   if (questionScores.length > 0) {
-    const avgQuestionScore = questionScores.reduce((sum: number, qs: any) => sum + (qs.score ?? 0), 0) / questionScores.length;
-    
-    // Apply penalty caps based on minimal response count
-    let maxAllowedBand = 9.0;
-    const minimalRatio = minimalResponseCount / Math.max(totalQuestionCount, 1);
-    
-    if (minimalRatio > 0.5) {
-      maxAllowedBand = 4.0; // More than 50% minimal responses
-      console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
-    } else if (minimalRatio > 0.3) {
-      maxAllowedBand = 5.0; // More than 30% minimal responses
-      console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
+    // Group question scores by part for weighted calculation
+    const scoresByPart: Record<number, number[]> = { 1: [], 2: [], 3: [] };
+    for (const qs of questionScores) {
+      const audioKey = qs.audioKey ?? '';
+      const match = audioKey.match(/^part(\d)/);
+      const partNum = match ? parseInt(match[1]) : 0;
+      if (partNum >= 1 && partNum <= 3 && typeof qs.score === 'number') {
+        scoresByPart[partNum].push(qs.score);
+      }
     }
     
-    // Cap the overall band if it exceeds the maximum allowed
-    if (overallBand > maxAllowedBand) {
-      console.log(`[evaluate-ai-speaking] Reducing overall band from ${overallBand} to ${maxAllowedBand} due to minimal responses`);
-      overallBand = maxAllowedBand;
-    }
+    // Calculate weighted average: each part with questions gets equal weight (33% each)
+    const partsWithScores = Object.entries(scoresByPart)
+      .filter(([_, scores]) => scores.length > 0)
+      .map(([partNum, scores]) => ({
+        partNum: parseInt(partNum),
+        avgScore: scores.reduce((a, b) => a + b, 0) / scores.length,
+      }));
     
-    // Sanity check: overall band shouldn't be more than 1.5 above average question score
-    if (overallBand > avgQuestionScore + 1.5) {
-      const adjustedBand = Math.round((avgQuestionScore + 1.0) * 2) / 2; // Round to nearest 0.5
-      console.log(`[evaluate-ai-speaking] Adjusting overall band from ${overallBand} to ${adjustedBand} (avg question score: ${avgQuestionScore.toFixed(1)})`);
-      overallBand = Math.min(overallBand, adjustedBand);
+    if (partsWithScores.length > 0) {
+      const weightedAvgQuestionScore = partsWithScores.reduce((sum, p) => sum + p.avgScore, 0) / partsWithScores.length;
+      console.log(`[evaluate-ai-speaking] Weighted avg question score: ${weightedAvgQuestionScore.toFixed(2)} from ${partsWithScores.length} parts`);
+      
+      // Apply penalty caps based on minimal response count
+      let maxAllowedBand = 9.0;
+      const minimalRatio = minimalResponseCount / Math.max(totalQuestionCount, 1);
+      
+      if (minimalRatio > 0.5) {
+        maxAllowedBand = 4.0; // More than 50% minimal responses
+        console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
+      } else if (minimalRatio > 0.3) {
+        maxAllowedBand = 5.0; // More than 30% minimal responses
+        console.log(`[evaluate-ai-speaking] Capping band to ${maxAllowedBand} due to ${(minimalRatio * 100).toFixed(0)}% minimal responses`);
+      }
+      
+      // Cap the overall band if it exceeds the maximum allowed
+      if (overallBand > maxAllowedBand) {
+        console.log(`[evaluate-ai-speaking] Reducing overall band from ${overallBand} to ${maxAllowedBand} due to minimal responses`);
+        overallBand = maxAllowedBand;
+      }
+      
+      // STRICT VALIDATION: Overall band should not exceed weighted question average by more than 1.0
+      // This ensures Gemini can't inflate scores by only focusing on good responses
+      if (overallBand > weightedAvgQuestionScore + 1.0) {
+        const adjustedBand = Math.round((weightedAvgQuestionScore + 0.5) * 2) / 2; // Round to nearest 0.5
+        console.log(`[evaluate-ai-speaking] STRICT adjustment: overall band from ${overallBand} to ${adjustedBand} (weighted avg: ${weightedAvgQuestionScore.toFixed(1)})`);
+        overallBand = adjustedBand;
+      }
     }
   }
 
