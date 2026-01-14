@@ -55,8 +55,62 @@ serve(async (req) => {
     const lockToken = crypto.randomUUID();
     const lockExpiresAt = new Date(Date.now() + LOCK_DURATION_MINUTES * 60 * 1000).toISOString();
 
-    // Try to claim the job with a lock
-    const { data: job, error: claimError } = await supabaseService
+    // Try to claim the job with a lock - first fetch the job to check conditions
+    const nowIso = new Date().toISOString();
+    
+    // First, check if job exists and is claimable
+    const { data: existingJob, error: fetchError } = await supabaseService
+      .from('speaking_evaluation_jobs')
+      .select('*')
+      .eq('id', jobId)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error(`[speaking-upload-job] Error fetching job ${jobId}:`, fetchError.message);
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: `Failed to fetch job: ${fetchError.message}`,
+        skipped: true 
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (!existingJob) {
+      console.log(`[speaking-upload-job] Job ${jobId} not found`);
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Job not found',
+        skipped: true 
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Check if job is in claimable state
+    const isClaimableStatus = ['pending', 'processing'].includes(existingJob.status);
+    const isClaimableStage = ['pending_upload', 'uploading', null].includes(existingJob.stage);
+    const lockExpired = !existingJob.lock_expires_at || new Date(existingJob.lock_expires_at) < new Date();
+    const noLock = !existingJob.lock_token;
+
+    if (!isClaimableStatus || !isClaimableStage || (!noLock && !lockExpired)) {
+      console.log(`[speaking-upload-job] Job ${jobId} not claimable: status=${existingJob.status}, stage=${existingJob.stage}, lockExpired=${lockExpired}, noLock=${noLock}`);
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Job already claimed or in wrong state',
+        skipped: true,
+        currentStatus: existingJob.status,
+        currentStage: existingJob.stage,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Now claim the job with an update
+    const { data: updatedJobs, error: claimError } = await supabaseService
       .from('speaking_evaluation_jobs')
       .update({
         status: 'processing',
@@ -68,17 +122,26 @@ serve(async (req) => {
         updated_at: new Date().toISOString(),
       })
       .eq('id', jobId)
-      .or(`lock_token.is.null,lock_expires_at.lt.${new Date().toISOString()}`)
-      .in('status', ['pending', 'processing'])
-      .in('stage', ['pending_upload', 'uploading'])
-      .select()
-      .single();
+      .select();
 
-    if (claimError || !job) {
-      console.log(`[speaking-upload-job] Could not claim job ${jobId}: ${claimError?.message || 'already claimed'}`);
+    if (claimError) {
+      console.error(`[speaking-upload-job] Error claiming job ${jobId}:`, claimError.message);
       return new Response(JSON.stringify({ 
         success: false, 
-        error: 'Job already claimed or not found',
+        error: `Failed to claim job: ${claimError.message}`,
+        skipped: true 
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const job = updatedJobs?.[0];
+    if (!job) {
+      console.log(`[speaking-upload-job] No job returned after update for ${jobId}`);
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Job claim failed - no data returned',
         skipped: true 
       }), {
         status: 200,
@@ -199,7 +262,7 @@ serve(async (req) => {
       .select('encrypted_value')
       .eq('user_id', userId)
       .eq('secret_name', 'GEMINI_API_KEY')
-      .single();
+      .maybeSingle();
 
     if (userSecret?.encrypted_value && appEncryptionKey) {
       try {
@@ -318,7 +381,7 @@ serve(async (req) => {
         .from('speaking_evaluation_jobs')
         .select('retry_count, max_retries')
         .eq('id', jobId)
-        .single();
+        .maybeSingle();
 
       const retryCount = (currentJob?.retry_count || 0) + 1;
       const maxRetries = currentJob?.max_retries || 3;

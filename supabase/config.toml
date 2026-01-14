@@ -1,1 +1,16 @@
 project_id = "jtfbocwsfxwrzfzvzgja"
+
+[functions.evaluate-speaking-async]
+verify_jwt = false
+
+[functions.process-speaking-job]
+verify_jwt = false
+
+[functions.speaking-upload-job]
+verify_jwt = false
+
+[functions.speaking-evaluate-job]
+verify_jwt = false
+
+[functions.speaking-job-runner]
+verify_jwt = false
