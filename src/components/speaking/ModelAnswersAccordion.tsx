@@ -54,12 +54,23 @@ function QuestionModelAnswer({
   model: ModelAnswer;
   index: number;
 }) {
-  // Determine if using new format (single targetBand + modelAnswer) or legacy (multiple band answers)
-  const isNewFormat = model.targetBand !== undefined && model.modelAnswer;
+  // Calculate target band from estimatedBand if not provided
+  // Target band is one level above estimated: 5.5 -> 6, 6 -> 7, 7 -> 8, etc.
+  const calculateTargetBand = (estimated: number): number => {
+    if (estimated <= 4.5) return 5;
+    if (estimated <= 5.5) return 6;
+    if (estimated <= 6.5) return 7;
+    if (estimated <= 7.5) return 8;
+    return 9;
+  };
+
+  // Determine if using new format (has modelAnswer field) or legacy (multiple band answers)
+  // Also handle cases where targetBand is missing but estimatedBand exists
+  const hasNewFormatAnswer = !!model.modelAnswer && model.modelAnswer.length > 0;
   
   // For legacy format, pick the closest band answer based on estimated or overall score
   const legacyAnswer = useMemo(() => {
-    if (isNewFormat) return null;
+    if (hasNewFormatAnswer) return null;
     
     // Try to find any available model answer from legacy format
     if (model.modelAnswerBand7) return { band: 7, answer: model.modelAnswerBand7, why: model.whyBand7Works };
@@ -68,11 +79,15 @@ function QuestionModelAnswer({
     if (model.modelAnswerBand9) return { band: 9, answer: model.modelAnswerBand9, why: model.whyBand9Works };
     
     return null;
-  }, [model, isNewFormat]);
+  }, [model, hasNewFormatAnswer]);
 
-  const targetBand = isNewFormat ? model.targetBand! : (legacyAnswer?.band || 7);
-  const modelAnswerText = isNewFormat ? model.modelAnswer! : (legacyAnswer?.answer || '');
-  const whyItWorks = isNewFormat ? model.whyItWorks : (legacyAnswer?.why || model.keyFeatures);
+  // Determine target band: use explicit targetBand, or calculate from estimatedBand, or fallback
+  const targetBand = hasNewFormatAnswer 
+    ? (model.targetBand ?? (model.estimatedBand ? calculateTargetBand(model.estimatedBand) : 7))
+    : (legacyAnswer?.band || 7);
+  
+  const modelAnswerText = hasNewFormatAnswer ? model.modelAnswer! : (legacyAnswer?.answer || '');
+  const whyItWorks = hasNewFormatAnswer ? model.whyItWorks : (legacyAnswer?.why || model.keyFeatures);
   const keyImprovements = model.keyImprovements;
   
   const config = getBandConfig(targetBand);
