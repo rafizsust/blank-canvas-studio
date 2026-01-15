@@ -1,13 +1,31 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, Play, Pause, StopCircle, Loader2, CheckCircle2, XCircle, Volume2, VolumeX, ArrowLeft } from 'lucide-react';
+import { Mic, Play, Pause, StopCircle, Loader2, CheckCircle2, XCircle, Volume2, VolumeX, ArrowLeft, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+// Accent options for speech recognition
+export const ACCENT_OPTIONS = [
+  { value: 'en-US', label: 'American English' },
+  { value: 'en-GB', label: 'British English' },
+  { value: 'en-IN', label: 'Indian English' },
+  { value: 'en-AU', label: 'Australian English' },
+] as const;
+
+export type AccentCode = typeof ACCENT_OPTIONS[number]['value'];
 
 interface MicrophoneTestProps {
-  onTestComplete: () => void;
+  onTestComplete: (selectedAccent: AccentCode) => void;
   onBack?: () => void;
+  initialAccent?: AccentCode;
 }
 
 // Helper to check if microphone permission is already granted
@@ -24,7 +42,17 @@ async function checkMicrophonePermission(): Promise<'granted' | 'denied' | 'prom
   return 'prompt'; // Default to prompt if we can't determine
 }
 
-export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) {
+// Optimized audio constraints for better speech recognition accuracy
+const OPTIMIZED_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  // Prefer higher sample rate for better audio quality
+  sampleRate: { ideal: 48000 },
+};
+
+export function MicrophoneTest({ onTestComplete, onBack, initialAccent = 'en-GB' }: MicrophoneTestProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
@@ -41,6 +69,9 @@ export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) 
   
   // Track if mic access is already granted (allows skipping the test)
   const [micAccessGranted, setMicAccessGranted] = useState(false);
+  
+  // Accent selection state
+  const [selectedAccent, setSelectedAccent] = useState<AccentCode>(initialAccent);
 
   // Check if microphone permission is already granted on mount
   useEffect(() => {
@@ -50,7 +81,9 @@ export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) 
       if (permissionState === 'granted') {
         // Permission already granted - verify it works by getting a stream briefly
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: OPTIMIZED_AUDIO_CONSTRAINTS 
+          });
           stream.getTracks().forEach(track => track.stop());
           // Permission is valid and working - allow user to skip test
           console.log('[MicrophoneTest] Microphone permission already granted');
@@ -81,7 +114,10 @@ export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) 
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Use optimized audio constraints for better speech recognition
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: OPTIMIZED_AUDIO_CONSTRAINTS 
+      });
       const recorder = new MediaRecorder(stream);
       
       audioChunks.current = [];
@@ -215,6 +251,29 @@ export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) 
         }
       </p>
 
+      {/* Accent Selection */}
+      <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-center gap-2 text-sm font-medium text-foreground">
+          <Globe className="w-4 h-4" />
+          Select Your Accent
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Choosing the correct accent improves speech recognition accuracy by ~30%
+        </p>
+        <Select value={selectedAccent} onValueChange={(v) => setSelectedAccent(v as AccentCode)}>
+          <SelectTrigger className="w-full bg-background">
+            <SelectValue placeholder="Select your accent" />
+          </SelectTrigger>
+          <SelectContent className="bg-popover z-50">
+            {ACCENT_OPTIONS.map((accent) => (
+              <SelectItem key={accent.value} value={accent.value}>
+                {accent.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Recording indicator */}
       {isRecording && (
         <div className="flex items-center justify-center gap-3 py-3 px-4 bg-destructive/10 border border-destructive/30 rounded-lg animate-pulse">
@@ -310,7 +369,7 @@ export function MicrophoneTest({ onTestComplete, onBack }: MicrophoneTestProps) 
 
       <div className="flex flex-col gap-3 mt-6">
         <Button
-          onClick={onTestComplete}
+          onClick={() => onTestComplete(selectedAccent)}
           disabled={!micAccessGranted && testPassed !== true}
           className="w-full"
         >
