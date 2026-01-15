@@ -175,11 +175,13 @@ export default function AIPracticeSpeakingTest() {
   const [showLowVolumeWarning, setShowLowVolumeWarning] = useState(false); // Real-time volume warning
 
   // Advanced speech analysis hook
+  // Note: Live transcript is captured for text-based evaluation but NOT displayed during test
+  // to avoid confusing test takers. Confidence scores are shown in the evaluation report.
   const speechAnalysis = useAdvancedSpeechAnalysis({
     language: 'en-GB',
-    onInterimResult: (transcript) => {
-      // Live transcript available for display if needed
-      console.log('[SpeakingTest] Live transcript:', transcript.slice(-50));
+    onInterimResult: () => {
+      // Transcript is captured internally for evaluation - no UI display during test
+      // Word confidence data will be shown in the Confidence tab after evaluation
     },
   });
 

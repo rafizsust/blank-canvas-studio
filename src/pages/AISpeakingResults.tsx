@@ -916,7 +916,23 @@ export default function AISpeakingResults() {
             {/* Confidence Analysis Tab - Word Confidence & Fluency Metrics */}
             <TabsContent value="confidence" className="mt-4 md:mt-6">
               <ConfidenceAnalysisTab 
-                transcripts={(result as any)?.answers?.transcripts} 
+                transcripts={(() => {
+                  // Try multiple paths to find transcripts data with word confidences
+                  const answers = (result as any)?.answers || (result as any);
+                  
+                  // Primary path: answers.transcripts (from text-based evaluation)
+                  if (answers?.transcripts && typeof answers.transcripts === 'object') {
+                    return answers.transcripts;
+                  }
+                  
+                  // Fallback: Check if transcripts are stored directly on result
+                  const directTranscripts = (result as any)?.transcripts;
+                  if (directTranscripts && typeof directTranscripts === 'object') {
+                    return directTranscripts;
+                  }
+                  
+                  return undefined;
+                })()} 
               />
             </TabsContent>
 

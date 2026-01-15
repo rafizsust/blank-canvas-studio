@@ -226,12 +226,27 @@ async function processJob(job: any, supabaseService: any, appEncryptionKey: stri
 
   console.log(`[processJob] Starting job ${jobId} for test ${test_id}, stage: ${stage || 'audio'}`);
 
-  // Check if this is a text-based evaluation (transcripts available)
+  // TEMPORARY: Force all evaluations to use text-based path when transcripts are available
+  // Audio-based Gemini evaluation is disabled temporarily to reduce costs
+  // The audio evaluation code is preserved below for future re-enablement
+  const hasTranscriptsForTextEval = partial_results?.transcripts && Object.keys(partial_results.transcripts).length > 0;
+  
+  if (hasTranscriptsForTextEval) {
+    console.log(`[processJob] FORCING text-based evaluation for job ${jobId} (audio evaluation temporarily disabled)`);
+    await processTextBasedEvaluation(job, supabaseService, appEncryptionKey);
+    return;
+  }
+
+  // Check if this is a text-based evaluation (transcripts available) - original condition
   if (stage === 'pending_text_eval' && partial_results?.transcripts) {
     console.log(`[processJob] Using text-based evaluation for job ${jobId}`);
     await processTextBasedEvaluation(job, supabaseService, appEncryptionKey);
     return;
   }
+  
+  // AUDIO-BASED EVALUATION CODE BELOW IS TEMPORARILY DISABLED
+  // When no transcripts are available, we fall through to audio evaluation
+  // TODO: Re-enable audio evaluation when needed by removing the force-text-eval check above
 
   // Get test payload
   const { data: testRow } = await supabaseService
@@ -688,60 +703,159 @@ function buildTextPrompt(
   payload?: any
 ): string {
   const parts = Array.isArray(payload?.speakingParts) ? payload.speakingParts : [];
-  const questionById = new Map<string, { partNumber: number; questionText: string }>();
+  const questionById = new Map<string, { partNumber: number; questionNumber: number; questionText: string }>();
   
   for (const p of parts) {
     for (const q of (p?.questions || [])) {
-      questionById.set(String(q?.id), { partNumber: Number(p?.part_number), questionText: q?.question_text || '' });
+      questionById.set(String(q?.id), { 
+        partNumber: Number(p?.part_number), 
+        questionNumber: Number(q?.question_number),
+        questionText: q?.question_text || '' 
+      });
     }
   }
 
-  const segmentSummaries = Object.entries(transcripts).map(([key, d]: [string, any]) => {
-    const match = key.match(/^part([123])-q(.+)$/);
-    const qInfo = match ? questionById.get(match[2]) : null;
-    
-    const wpm = d?.fluencyMetrics?.wordsPerMinute || 0;
-    const fillers = d?.fluencyMetrics?.fillerCount || 0;
-    const pauses = d?.fluencyMetrics?.pauseCount || 0;
-    const clarity = d?.overallClarityScore || 0;
-    const pitch = d?.prosodyMetrics?.pitchVariation || 0;
-    const duration = d?.durationMs ? Math.round(d.durationMs / 1000) : 0;
+  // Build ordered segment list with metadata
+  const orderedSegments = Object.entries(transcripts)
+    .map(([key, d]: [string, any]) => {
+      const match = key.match(/^part([123])-q(.+)$/);
+      const partNum = match ? parseInt(match[1]) : 0;
+      const questionId = match ? match[2] : '';
+      const qInfo = questionById.get(questionId);
+      
+      const wpm = d?.fluencyMetrics?.wordsPerMinute || 0;
+      const fillers = d?.fluencyMetrics?.fillerCount || 0;
+      const pauses = d?.fluencyMetrics?.pauseCount || 0;
+      const clarity = d?.overallClarityScore || 0;
+      const pitch = d?.prosodyMetrics?.pitchVariation || 0;
+      const duration = d?.durationMs ? Math.round(d.durationMs / 1000) : 0;
+      const transcript = d?.rawTranscript || d?.cleanedTranscript || '';
+      
+      return {
+        key,
+        partNum,
+        questionNumber: qInfo?.questionNumber || 0,
+        questionText: qInfo?.questionText || 'Unknown',
+        transcript,
+        wpm,
+        fillers,
+        pauses,
+        clarity,
+        pitch,
+        duration,
+      };
+    })
+    .sort((a, b) => {
+      if (a.partNum !== b.partNum) return a.partNum - b.partNum;
+      return a.questionNumber - b.questionNumber;
+    });
 
-    return `
-### ${key.toUpperCase()}
-Question: ${qInfo?.questionText || 'Unknown'}
-Transcript: "${d?.rawTranscript || d?.cleanedTranscript || ''}"
-Duration: ${duration}s | WPM: ${wpm}
-Fillers: ${fillers} | Pauses: ${pauses}
-Clarity: ${clarity}% | Pitch Variation: ${pitch.toFixed(0)}%`;
-  }).join('\n');
+  const segmentSummaries = orderedSegments.map((seg, idx) => `
+### SEGMENT_${idx}: ${seg.key.toUpperCase()}
+Part ${seg.partNum} | Question ${seg.questionNumber}: "${seg.questionText}"
+Transcript: "${seg.transcript}"
+Duration: ${seg.duration}s | WPM: ${seg.wpm}
+Fillers: ${seg.fillers} | Pauses: ${seg.pauses}
+Clarity: ${seg.clarity}% | Pitch Variation: ${seg.pitch.toFixed(0)}%`).join('\n');
 
-  return `You are an IELTS Speaking examiner. Evaluate these responses.
+  const numSegments = orderedSegments.length;
 
-## DATA
-- Transcripts from browser speech recognition
-- Fluency/prosody metrics from audio analysis
+  return `You are a CERTIFIED SENIOR IELTS Speaking Examiner with 20+ years of experience.
+Evaluate these responses exactly as an official IELTS examiner. Return ONLY valid JSON.
 
-Topic: ${topic} | Difficulty: ${difficulty}
-${fluencyFlag ? '⚠️ Short Part 2 response' : ''}
+## CONTEXT
+Topic: ${topic} | Difficulty: ${difficulty} | Total Segments: ${numSegments}
+${fluencyFlag ? '⚠️ Short Part 2 response - apply fluency penalty.' : ''}
 
+## CANDIDATE RESPONSES (from browser speech recognition)
 ${segmentSummaries}
 
-## OUTPUT (JSON only)
+══════════════════════════════════════════════════════════════
+OFFICIAL IELTS BAND DESCRIPTORS
+══════════════════════════════════════════════════════════════
+
+FLUENCY AND COHERENCE (FC):
+- Band 9: Speaks fluently with rare hesitation; hesitation is content-related
+- Band 7: Speaks at length without noticeable effort; some language-related hesitation
+- Band 5: Maintains flow with repetition/self-correction/slow speech
+- Band 4: Cannot respond without noticeable pauses; frequent repetition
+
+LEXICAL RESOURCE (LR):
+- Band 9: Full flexibility; idiomatic language naturally
+- Band 7: Flexible vocabulary; some less common/idiomatic vocabulary
+- Band 5: Limited vocabulary; pauses to search for words
+
+GRAMMATICAL RANGE AND ACCURACY (GRA):
+- Band 9: Full range of structures; consistently accurate
+- Band 7: Range of complex structures; frequently error-free
+- Band 5: Basic sentence forms; limited complex structures
+
+PRONUNCIATION (P) - Estimated from speech recognition patterns:
+- Band 9: Full range of features with precision
+- Band 7: Most features of Band 8; some L1 influence
+- Band 5: Some Band 6 features; mispronounces individual words
+
+══════════════════════════════════════════════════════════════
+REQUIRED JSON OUTPUT SCHEMA
+══════════════════════════════════════════════════════════════
+
 \`\`\`json
 {
   "overall_band": 6.5,
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": [] },
-    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": [] },
-    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": [] },
-    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": [], "disclaimer": "Estimated from speech recognition patterns" }
+    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
+    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
+    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
+    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."], "disclaimer": "Estimated from speech recognition patterns" }
   },
-  "lexical_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}],
-  "improvement_priorities": ["...", "..."],
-  "examiner_notes": "..."
+  "summary": "Overall performance summary in 2-3 sentences",
+  "examiner_notes": "Brief examiner observation",
+  "lexical_upgrades": [{"original": "word used", "upgraded": "band 8+ alternative", "context": "how to use it"}],
+  "improvement_priorities": ["Priority 1...", "Priority 2..."],
+  "strengths_to_maintain": ["Key strength 1...", "Key strength 2..."],
+  "part_analysis": [
+    {
+      "part_number": 1,
+      "performance_notes": "Summary of Part 1 performance",
+      "key_moments": ["Positive moment 1", "Positive moment 2"],
+      "areas_for_improvement": ["Area 1", "Area 2"]
+    }
+  ],
+  "transcripts_by_part": {
+    "1": "Combined transcript for Part 1...",
+    "2": "Combined transcript for Part 2...",
+    "3": "Combined transcript for Part 3..."
+  },
+  "transcripts_by_question": {
+    "1": [{"segment_key": "part1-q...", "question_number": 1, "question_text": "...", "transcript": "..."}],
+    "2": [{"segment_key": "part2-q...", "question_number": 1, "question_text": "...", "transcript": "..."}],
+    "3": [{"segment_key": "part3-q...", "question_number": 1, "question_text": "...", "transcript": "..."}]
+  },
+  "modelAnswers": [
+    {
+      "segment_key": "part1-q...",
+      "partNumber": 1,
+      "questionNumber": 1,
+      "question": "Question text",
+      "candidateResponse": "EXACT transcript from input",
+      "estimatedBand": 5.5,
+      "modelAnswer": "A band 8+ model answer that addresses the same question naturally and fluently",
+      "whyItWorks": ["Uses idiomatic expressions", "Shows range of vocabulary", "Maintains coherent flow"],
+      "keyImprovements": ["Replace 'good' with 'exceptional'", "Add a specific example", "Use more complex grammar"]
+    }
+  ]
 }
-\`\`\``;
+\`\`\`
+
+IMPORTANT INSTRUCTIONS:
+1. Return EXACTLY ${numSegments} modelAnswers, one for each segment above
+2. Use the EXACT segment_key from the input (e.g., "part1-q123")
+3. Copy the EXACT transcript as candidateResponse
+4. Generate a realistic band 8+ model answer for the same question
+5. Include part_analysis for each part that has responses
+6. Group transcripts by part and by question in the output
+
+Return ONLY the JSON, no explanation.`;
 }
 
 async function decryptKey(encrypted: string, appKey: string): Promise<string> {
