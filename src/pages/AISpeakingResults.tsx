@@ -118,6 +118,7 @@ interface SpeakingResult {
     by_part: Record<number, string>;
     by_question?: Record<number, TranscriptEntry[]>;
   };
+  confidence_transcripts?: Record<string, ConfidenceTranscriptData>;
   created_at: string;
 }
 
@@ -938,7 +939,7 @@ export default function AISpeakingResults() {
 
             {/* Confidence Analysis Tab - Word Confidence & Fluency Metrics */}
             <TabsContent value="confidence" className="mt-4 md:mt-6">
-              <ConfidenceAnalysisTab transcripts={(result as any)?.confidence_transcripts} />
+              <ConfidenceAnalysisTab transcripts={result?.confidence_transcripts} />
             </TabsContent>
 
             {/* Candidate Transcript with Audio Playback */}
