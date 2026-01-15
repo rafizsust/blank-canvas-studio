@@ -34,6 +34,16 @@ interface EvaluationRequest {
   fluencyFlag?: boolean;
   retryJobId?: string;
   cancelExisting?: boolean; // If true, cancel existing jobs before creating new one
+  // Text-based evaluation data (from browser speech analysis)
+  transcripts?: Record<string, {
+    rawTranscript: string;
+    cleanedTranscript: string;
+    wordConfidences: Array<{ word: string; confidence: number; isFiller: boolean; isRepeat: boolean }>;
+    fluencyMetrics: { wordsPerMinute: number; pauseCount: number; fillerCount: number; fillerRatio: number; repetitionCount: number; overallFluencyScore: number };
+    prosodyMetrics: { pitchVariation: number; stressEventCount: number; rhythmConsistency: number };
+    durationMs: number;
+    overallClarityScore: number;
+  }>;
 }
 
 serve(async (req) => {
@@ -64,7 +74,13 @@ serve(async (req) => {
     }
 
     const body: EvaluationRequest = await req.json();
-    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId, cancelExisting } = body;
+    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId, cancelExisting, transcripts } = body;
+
+    // Check if text-based evaluation is available
+    const hasTranscripts = transcripts && Object.keys(transcripts).length > 0;
+    if (hasTranscripts) {
+      console.log(`[evaluate-speaking-async] Text-based evaluation available with ${Object.keys(transcripts).length} segments`);
+    }
 
     if (!testId || !filePaths || Object.keys(filePaths).length === 0) {
       return new Response(JSON.stringify({ error: 'Missing testId or filePaths' }), {
@@ -156,13 +172,14 @@ serve(async (req) => {
       }
 
       // Create new job record with staged processing
+      // If transcripts are available, we can skip audio upload and go straight to text-based eval
       const { data: newJob, error: jobError } = await supabaseService
         .from('speaking_evaluation_jobs')
         .insert({
           user_id: user.id,
           test_id: testId,
           status: 'pending',
-          stage: 'pending_upload',
+          stage: hasTranscripts ? 'pending_text_eval' : 'pending_upload',
           file_paths: filePaths,
           durations: durations || {},
           topic,
@@ -170,6 +187,8 @@ serve(async (req) => {
           fluency_flag: fluencyFlag || false,
           max_retries: 5,
           retry_count: 0,
+          // Store transcripts for text-based evaluation (much cheaper than audio)
+          partial_results: hasTranscripts ? { transcripts } : null,
         })
         .select()
         .single();

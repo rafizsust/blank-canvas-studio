@@ -39,6 +39,9 @@ import { cn } from '@/lib/utils';
 import { AudioLevelIndicator, AudioVolumeControl } from '@/components/speaking';
 import { useFullscreenTest } from '@/hooks/useFullscreenTest';
 import { compressAudio } from '@/utils/audioCompressor';
+import { useAdvancedSpeechAnalysis, SpeechAnalysisResult } from '@/hooks/useAdvancedSpeechAnalysis';
+import { InstantSpeechFeedback } from '@/components/speaking/InstantSpeechFeedback';
+import { BrowserCompatibilityCheck } from '@/components/speaking/BrowserCompatibilityCheck';
 
 // IELTS Official Timings
 const TIMING = {
@@ -164,6 +167,20 @@ export default function AIPracticeSpeakingTest() {
 
   // Store audio per question (so we can transcribe + show transcript question-by-question)
   const [audioSegments, setAudioSegments] = useState<Record<string, AudioSegmentMeta>>({});
+
+  // Speech analysis state for text-based evaluation
+  const [segmentAnalyses, setSegmentAnalyses] = useState<Record<string, SpeechAnalysisResult>>({});
+  const [currentAnalysis, setCurrentAnalysis] = useState<SpeechAnalysisResult | null>(null);
+  const [showInstantFeedback, setShowInstantFeedback] = useState(false);
+
+  // Advanced speech analysis hook
+  const speechAnalysis = useAdvancedSpeechAnalysis({
+    language: 'en-GB',
+    onInterimResult: (transcript) => {
+      // Live transcript available for display if needed
+      console.log('[SpeakingTest] Live transcript:', transcript.slice(-50));
+    },
+  });
 
   // Refs for state access in callbacks (avoid stale closures)
   const phaseRef = useRef<TestPhase>(phase);
@@ -396,6 +413,8 @@ export default function AIPracticeSpeakingTest() {
     // Cancel any ongoing prompt audio AND prevent any pending retries/timeouts from firing.
     stopPromptAudio();
     activeSpeakSessionRef.current = null;
+    setShowInstantFeedback(false);
+    setCurrentAnalysis(null);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -425,6 +444,11 @@ export default function AIPracticeSpeakingTest() {
           audioChunksRef.current.push(e.data);
         }
       };
+
+      // Start speech analysis in parallel for text-based evaluation
+      if (speechAnalysis.isSupported) {
+        await speechAnalysis.start(stream);
+      }
 
       // IMPORTANT: no timeslice
       recorder.start();
@@ -458,6 +482,27 @@ export default function AIPracticeSpeakingTest() {
     if (!recorder || !key || !meta) {
       setIsRecording(false);
       return;
+    }
+
+    // Stop speech analysis and capture results
+    if (speechAnalysis.isAnalyzing) {
+      const analysis = speechAnalysis.stop();
+      if (analysis && key) {
+        console.log(`[SpeakingTest] Speech analysis for ${key}:`, {
+          rawTranscript: analysis.rawTranscript.slice(0, 100),
+          wordCount: analysis.wordConfidences.length,
+          fluencyScore: analysis.fluencyMetrics.overallFluencyScore,
+          clarityScore: analysis.overallClarityScore,
+        });
+        setSegmentAnalyses(prev => ({
+          ...prev,
+          [key]: analysis,
+        }));
+        setCurrentAnalysis(analysis);
+        // Show instant feedback for a few seconds
+        setShowInstantFeedback(true);
+        setTimeout(() => setShowInstantFeedback(false), 5000);
+      }
     }
 
     // Save after MediaRecorder flushes the final dataavailable event.
@@ -1043,7 +1088,26 @@ export default function AIPracticeSpeakingTest() {
         .reduce((acc, [, s]) => acc + (s.duration || 0), 0);
       const fluencyFlag = part2Duration > 0 && part2Duration < PART2_MIN_SPEAKING;
 
+      // Build transcript data from speech analysis for text-based evaluation
+      const transcriptData: Record<string, unknown> = {};
+      for (const [key, analysis] of Object.entries(segmentAnalyses)) {
+        transcriptData[key] = {
+          rawTranscript: analysis.rawTranscript,
+          cleanedTranscript: analysis.cleanedTranscript,
+          wordConfidences: analysis.wordConfidences,
+          fluencyMetrics: analysis.fluencyMetrics,
+          prosodyMetrics: {
+            pitchVariation: analysis.prosodyMetrics.pitchVariation,
+            stressEventCount: analysis.prosodyMetrics.stressEventCount,
+            rhythmConsistency: analysis.prosodyMetrics.rhythmConsistency,
+          },
+          durationMs: analysis.durationMs,
+          overallClarityScore: analysis.overallClarityScore,
+        };
+      }
+
       // STEP 2: Call ASYNC evaluation - returns immediately with 202
+      // Include transcript data for text-based evaluation (much cheaper than audio)
       const { data, error } = await supabase.functions.invoke('evaluate-speaking-async', {
         body: {
           testId,
@@ -1052,6 +1116,8 @@ export default function AIPracticeSpeakingTest() {
           topic: test?.topic,
           difficulty: test?.difficulty,
           fluencyFlag,
+          // Include text-based analysis data for cheaper evaluation
+          transcripts: Object.keys(transcriptData).length > 0 ? transcriptData : undefined,
         },
       });
 
@@ -1646,7 +1712,7 @@ export default function AIPracticeSpeakingTest() {
   // TestStartOverlay removed - mic test is the only entry point now
   if (showMicrophoneTest) {
     return (
-      <div className="min-h-screen bg-secondary flex items-center justify-center">
+      <div className="min-h-screen bg-secondary flex flex-col items-center justify-center gap-4">
         <MicrophoneTest 
           onTestComplete={() => {
             setShowMicrophoneTest(false);
@@ -1657,6 +1723,10 @@ export default function AIPracticeSpeakingTest() {
           }}
           onBack={() => navigate('/ai-practice')}
         />
+        {/* Browser compatibility check for speech analysis */}
+        <div className="max-w-md w-full px-4">
+          <BrowserCompatibilityCheck />
+        </div>
       </div>
     );
   }
@@ -1889,6 +1959,30 @@ export default function AIPracticeSpeakingTest() {
               </Button>
             </div>
           </div>
+        )}
+
+        {/* Instant Speech Feedback - shown briefly after recording stops */}
+        {showInstantFeedback && currentAnalysis && !isRecording && (
+          <div className="mb-4 md:mb-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <InstantSpeechFeedback 
+              analysis={currentAnalysis} 
+              showDisclaimer={true}
+            />
+          </div>
+        )}
+
+        {/* Live transcript during recording */}
+        {isRecording && speechAnalysis.interimTranscript && (
+          <Card className="mb-4 md:mb-6 border-muted bg-muted/30">
+            <CardContent className="p-3 md:p-4">
+              <div className="flex items-start gap-2 md:gap-3">
+                <Mic className="w-4 h-4 md:w-5 md:h-5 text-primary mt-1 animate-pulse flex-shrink-0" />
+                <p className="text-sm md:text-base text-muted-foreground italic">
+                  {speechAnalysis.interimTranscript || 'Listening...'}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Part 2 - Start Speaking Early Button */}
