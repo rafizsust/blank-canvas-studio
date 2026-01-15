@@ -145,6 +145,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   const consecutiveFailuresRef = useRef(0);
   const lastProcessedTextRef = useRef(new Set<string>());
   const lastFinalTextRef = useRef('');
+  
+  // CRITICAL: Track last interim text to preserve during restart
+  // This captures words that might be lost during the stop/start gap
+  const lastInterimTextRef = useRef('');
 
   // Timing
   const sessionStartRef = useRef(0);
@@ -208,25 +212,77 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       const text = result[0].transcript;
 
       if (result.isFinal) {
-        // CRITICAL: Deduplicate across restarts using text content
+        // CRITICAL: Improved deduplication using suffix-based detection
+        // This prevents losing new content when Chrome sends overlapping results during restarts
         const normalizedText = text.trim().toLowerCase();
-        if (lastProcessedTextRef.current.has(normalizedText) || text === lastFinalTextRef.current) {
-          console.log('[SpeechAnalysis] Skipping duplicate final:', text.substring(0, 30));
+        const words = normalizedText.split(/\s+/).filter(w => w.length > 0);
+        
+        // Skip if exact same text or empty
+        if (normalizedText === lastFinalTextRef.current.toLowerCase() || words.length === 0) {
+          console.log('[SpeechAnalysis] Skipping exact duplicate:', text.substring(0, 30));
           continue;
         }
-
-        lastProcessedTextRef.current.add(normalizedText);
-        lastFinalTextRef.current = text;
+        
+        // Check for overlap with previous text using suffix matching
+        // This allows new content to be appended even if there's partial overlap
+        let newContent = text;
+        const lastWords = lastFinalTextRef.current.trim().toLowerCase().split(/\s+/).filter(w => w.length > 0);
+        
+        if (lastWords.length > 0 && words.length > 0) {
+          // Find the longest suffix of lastWords that is a prefix of words
+          let overlapLen = 0;
+          const maxCheck = Math.min(lastWords.length, words.length, 15); // Limit check for performance
+          
+          for (let len = 1; len <= maxCheck; len++) {
+            const suffix = lastWords.slice(-len).join(' ');
+            const prefix = words.slice(0, len).join(' ');
+            if (suffix === prefix) {
+              overlapLen = len;
+            }
+          }
+          
+          if (overlapLen > 0) {
+            // Extract only the new portion after the overlap
+            const newWords = text.trim().split(/\s+/).slice(overlapLen);
+            if (newWords.length === 0) {
+              console.log('[SpeechAnalysis] Skipping fully overlapping segment:', text.substring(0, 30));
+              continue;
+            }
+            newContent = newWords.join(' ');
+            console.log(`[SpeechAnalysis] Overlap detected (${overlapLen} words), extracting new: "${newContent.substring(0, 40)}..."`);
+          }
+        }
+        
+        // Also check if this new content is a substring of recent finals (prevent duplicates from restarts)
+        const newNormalized = newContent.trim().toLowerCase();
+        let isDuplicate = false;
+        for (const processed of lastProcessedTextRef.current) {
+          if (processed.includes(newNormalized) && newNormalized.length > 3) {
+            isDuplicate = true;
+            console.log('[SpeechAnalysis] Skipping substring duplicate:', newContent.substring(0, 30));
+            break;
+          }
+        }
+        
+        if (isDuplicate) continue;
+        
+        // Track this segment to prevent future duplicates
+        lastProcessedTextRef.current.add(newNormalized);
+        lastFinalTextRef.current = (lastFinalTextRef.current + ' ' + newContent).trim();
 
         // Keep set size manageable
         if (lastProcessedTextRef.current.size > 50) {
           const entries = Array.from(lastProcessedTextRef.current);
           lastProcessedTextRef.current = new Set(entries.slice(-30));
         }
+        
+        // Use the deduplicated new content instead of the full text
+        const textToProcess = newContent;
 
         // CHROME: Extract ghost words before they disappear
+        // Use textToProcess (deduplicated content) for ghost word extraction
         if (browser.isChrome && ghostTrackerRef.current) {
-          const finalWords = text.trim().split(/\s+/).filter((w: string) => w.length > 0);
+          const finalWords = textToProcess.trim().split(/\s+/).filter((w: string) => w.length > 0);
           const finalWordsSet = new Set<string>(finalWords.map((w: string) => w.toLowerCase()));
           const recovered = ghostTrackerRef.current.extractAcceptedGhosts(finalWordsSet);
 
@@ -237,9 +293,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
           }
         }
 
-        newFinalText += text + ' ';
-        wordTrackerRef.current?.addSnapshot(text, true);
-        console.log('[SpeechAnalysis] Final:', text.substring(0, 50));
+        // Use textToProcess (deduplicated content) to prevent duplicates in final transcript
+        newFinalText += textToProcess + ' ';
+        wordTrackerRef.current?.addSnapshot(textToProcess, true);
+        console.log('[SpeechAnalysis] Final:', textToProcess.substring(0, 50));
       } else {
         interimText += text;
         wordTrackerRef.current?.addSnapshot(text, false);
@@ -254,6 +311,12 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
 
     if (newFinalText) {
       finalTranscriptRef.current += newFinalText;
+    }
+
+    // CRITICAL: Store interim text for potential recovery during restart
+    // This captures words that might be lost when watchdog triggers stop()
+    if (interimText.trim()) {
+      lastInterimTextRef.current = interimText.trim();
     }
 
     const combined = (finalTranscriptRef.current + interimText).trim();
@@ -280,6 +343,8 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   /**
    * Handle recognition end with SAFE restart.
    * IMPORTANT: NEVER create a new instance here.
+   * 
+   * ENHANCED: Preserves interim text that might be lost during restart gap
    */
   const handleEnd = useCallback(() => {
     if (!isAnalyzingRef.current) return;
@@ -290,9 +355,36 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       isAnalyzing: isAnalyzingRef.current,
       isManualStop: isManualStopRef.current,
       isRestarting: isRestartingRef.current,
+      lastInterim: lastInterimTextRef.current?.substring(0, 30),
     });
 
     if (!isAnalyzingRef.current || isManualStopRef.current) return;
+
+    // CRITICAL FIX: If we have interim text when stopping, promote it to final
+    // This prevents losing words that were in-progress during restart
+    if (isRestartingRef.current && lastInterimTextRef.current && browser.isChrome) {
+      const interimToPromote = lastInterimTextRef.current.trim();
+      if (interimToPromote.length > 0) {
+        // Check if this interim text is meaningfully different from last final
+        const lastFinalWords = lastFinalTextRef.current.toLowerCase().split(/\s+/).slice(-10);
+        const interimWords = interimToPromote.toLowerCase().split(/\s+/);
+        
+        // Find words in interim that are NOT in recent finals
+        const newWords = interimWords.filter(w => 
+          w.length > 2 && !lastFinalWords.includes(w)
+        );
+        
+        if (newWords.length >= 2) {
+          console.log('[SpeechAnalysis] Promoting interim to final before restart:', newWords.join(' '));
+          // Only add the new words to prevent duplicates
+          const newContent = newWords.join(' ');
+          finalTranscriptRef.current += ' ' + newContent;
+          lastFinalTextRef.current = (lastFinalTextRef.current + ' ' + newContent).trim();
+        }
+      }
+      // Clear the interim ref after processing
+      lastInterimTextRef.current = '';
+    }
 
     // Only restart if we intentionally stopped OR if browser cut off unexpectedly.
     // In both cases we restart the SAME instance.
