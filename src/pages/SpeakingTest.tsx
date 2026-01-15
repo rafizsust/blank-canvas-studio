@@ -1206,7 +1206,7 @@ export default function SpeakingTest() {
     return (
       <div className="min-h-screen bg-secondary flex items-center justify-center">
         <MicrophoneTest 
-          onTestComplete={() => {
+          onTestComplete={(_accent) => {
             setShowMicrophoneTest(false);
             setTestPhase('ready');
             // Enter fullscreen mode automatically

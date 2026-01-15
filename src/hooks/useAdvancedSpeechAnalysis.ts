@@ -86,6 +86,14 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   const isAnalyzingRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const rmsMonitorRef = useRef<number | null>(null);
+  
+  // Store the language for dynamic updates
+  const languageRef = useRef(options.language || 'en-GB');
+  
+  // Update language ref when options change
+  if (options.language && options.language !== languageRef.current) {
+    languageRef.current = options.language;
+  }
 
   const start = useCallback(async (stream: MediaStream) => {
     // Check browser support
@@ -131,11 +139,13 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     wordTrackerRef.current = new WordConfidenceTracker();
     wordTrackerRef.current.start();
 
-    // Start speech recognition
+    // Start speech recognition with the current language setting
     const recognition = new SpeechRecognitionClass();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = options.language || 'en-GB';
+    recognition.lang = languageRef.current; // Use the dynamic language from ref
+    
+    console.log(`[SpeechAnalysis] Starting recognition with language: ${recognition.lang}`);
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interimText = '';
