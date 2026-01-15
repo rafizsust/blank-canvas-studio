@@ -82,6 +82,19 @@ export function useBrowserAdaptiveSpeechRecognition(
   const primaryRecognitionRef = useRef<SpeechRecognitionType | null>(null);
   const secondaryRecognitionRef = useRef<SpeechRecognitionType | null>(null);
   const activeInstanceRef = useRef<'primary' | 'secondary'>('primary');
+
+  // Restart guard: prevents intentionally aborted instances (during cycling/cleanup)
+  // from auto-restarting in their `onend` handler.
+  const restartAllowedRef = useRef<{ primary: boolean; secondary: boolean }>({
+    primary: true,
+    secondary: true,
+  });
+
+  // Watchdog: Chrome sometimes stops emitting results without firing `end`.
+  // If we haven't seen results in a while, force a seamless cycle.
+  const lastResultAtRef = useRef<number>(0);
+  const lastCycleAtRef = useRef<number>(0);
+  const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   const isManualStopRef = useRef(false);
   const isListeningRef = useRef(false);
@@ -102,6 +115,41 @@ export function useBrowserAdaptiveSpeechRecognition(
     }
     return () => { if (interval) clearInterval(interval); };
   }, [isListening]);
+
+  // Chrome watchdog: if recognition stops producing results without firing `end`, force a seamless cycle.
+  useEffect(() => {
+    if (!browser.isChrome || !isListening) {
+      if (watchdogTimerRef.current) {
+        clearInterval(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (watchdogTimerRef.current) clearInterval(watchdogTimerRef.current);
+
+    watchdogTimerRef.current = setInterval(() => {
+      if (!isListeningRef.current || isManualStopRef.current) return;
+
+      const now = Date.now();
+      const sinceResult = now - (lastResultAtRef.current || now);
+      const sinceCycle = now - (lastCycleAtRef.current || 0);
+
+      // If we haven't received anything for a while, Chrome has likely wedged.
+      // Force a cycle (but not too frequently).
+      if (sinceResult > 12000 && sinceCycle > 6000) {
+        console.warn('[SpeechRecognition] Watchdog: no results recently; forcing seamless cycle');
+        performSeamlessCycle();
+      }
+    }, 2500);
+
+    return () => {
+      if (watchdogTimerRef.current) {
+        clearInterval(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+    };
+  }, [browser.isChrome, isListening, performSeamlessCycle]);
   
   useEffect(() => {
     return () => {
@@ -109,6 +157,7 @@ export function useBrowserAdaptiveSpeechRecognition(
       secondaryRecognitionRef.current?.abort();
       if (cycleTimerRef.current) clearTimeout(cycleTimerRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (watchdogTimerRef.current) clearInterval(watchdogTimerRef.current);
     };
   }, []);
 
@@ -144,20 +193,22 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   const handleResult = useCallback((event: Event, instanceId: string) => {
     if (!isListeningRef.current) return;
-    
+
+    lastResultAtRef.current = Date.now();
+
     const e = event as unknown as { resultIndex: number; results: SpeechRecognitionResultList };
     resetSilenceTimeout();
     pauseTrackerRef.current.recordSpeechEvent();
     consecutiveFailuresRef.current = 0;
-    
+
     let newFinalText = '';
     let newInterimText = '';
     const newWords: TranscriptState['words'] = [];
-    
+
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const result = e.results[i];
       const transcript = result[0].transcript;
-      
+
       if (result.isFinal) {
         // CRITICAL: Deduplicate across all instances
         const normalizedText = transcript.trim().toLowerCase();
@@ -165,19 +216,19 @@ export function useBrowserAdaptiveSpeechRecognition(
           console.log(`[SpeechRecognition] Skipping duplicate from ${instanceId}`);
           continue;
         }
-        
+
         lastProcessedTextRef.current.add(normalizedText);
         lastFinalTextRef.current = transcript;
-        
+
         // Keep set size manageable
         if (lastProcessedTextRef.current.size > 50) {
           const entries = Array.from(lastProcessedTextRef.current);
           lastProcessedTextRef.current = new Set(entries.slice(-30));
         }
-        
+
         const finalWords = transcript.trim().split(/\s+/).filter((w: string) => w.length > 0);
         const finalWordsSet = new Set<string>(finalWords.map((w: string) => w.toLowerCase()));
-        
+
         if (browser.isChrome) {
           const recovered = ghostTrackerRef.current.extractAcceptedGhosts(finalWordsSet);
           if (recovered.length > 0) {
@@ -185,7 +236,7 @@ export function useBrowserAdaptiveSpeechRecognition(
             setGhostWords(prev => [...prev, ...recovered]);
           }
         }
-        
+
         finalWords.forEach((text: string) => {
           newWords.push({
             text,
@@ -204,7 +255,7 @@ export function useBrowserAdaptiveSpeechRecognition(
         }
       }
     }
-    
+
     if (newFinalText) {
       const trimmed = newFinalText.trim();
       setFinalTranscript(prev => (prev ? `${prev} ${trimmed}` : trimmed).trim());
@@ -228,12 +279,23 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   const handleEnd = useCallback((recognition: SpeechRecognitionType, instanceId: string) => {
     if (!isListeningRef.current || isManualStopRef.current) return;
-    
+
+    const id = instanceId === 'primary' || instanceId === 'secondary'
+      ? instanceId
+      : (activeInstanceRef.current as 'primary' | 'secondary');
+
+    // If we intentionally aborted this instance (during seamless cycling), do NOT restart it.
+    if (!restartAllowedRef.current[id]) {
+      return;
+    }
+
     console.log(`[SpeechRecognition] Instance ${instanceId} ended, restarting...`);
-    
+
     // Immediate restart
     setTimeout(() => {
       if (isListeningRef.current && !isManualStopRef.current && recognition) {
+        // Re-check in case we toggled the guard after scheduling
+        if (!restartAllowedRef.current[id]) return;
         try {
           recognition.start();
           console.log(`[SpeechRecognition] Instance ${instanceId} restarted`);
@@ -258,57 +320,65 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   const performSeamlessCycle = useCallback(() => {
     if (!isListeningRef.current || isManualStopRef.current) return;
-    
+
     const currentActive = activeInstanceRef.current;
     const nextActive = currentActive === 'primary' ? 'secondary' : 'primary';
-    
+
+    // Prevent a storm of cycles if Chrome is glitching
+    lastCycleAtRef.current = Date.now();
+
     console.log(`[SpeechRecognition] Starting seamless cycle: ${currentActive} -> ${nextActive}`);
-    
+
     // Create and start new instance FIRST
     const newRecognition = createRecognitionInstance();
     if (!newRecognition) {
       console.error('[SpeechRecognition] Failed to create new instance');
       return;
     }
-    
+
+    // New instance is allowed to restart (it's now the active one)
+    restartAllowedRef.current[nextActive] = true;
+
     setupRecognitionHandlers(newRecognition, nextActive);
-    
+
     try {
       newRecognition.start();
-      
+
       if (nextActive === 'primary') {
         primaryRecognitionRef.current = newRecognition;
       } else {
         secondaryRecognitionRef.current = newRecognition;
       }
-      
+
       // After overlap, stop old instance
       setTimeout(() => {
         if (!isListeningRef.current) return;
-        
-        const oldRecognition = currentActive === 'primary' 
-          ? primaryRecognitionRef.current 
+
+        const oldRecognition = currentActive === 'primary'
+          ? primaryRecognitionRef.current
           : secondaryRecognitionRef.current;
-        
+
         if (oldRecognition) {
           try {
+            // This abort is intentional; block its onend auto-restart.
+            restartAllowedRef.current[currentActive] = false;
             oldRecognition.abort();
             console.log(`[SpeechRecognition] Old instance ${currentActive} stopped`);
           } catch {
             // Already stopped
           }
         }
-        
+
         activeInstanceRef.current = nextActive;
       }, OVERLAP_DURATION_MS);
-      
+
     } catch (err) {
       console.error('[SpeechRecognition] Failed to start new instance:', err);
     }
-    
+
     // Schedule next cycle
     scheduleCycle();
-  }, [createRecognitionInstance, setupRecognitionHandlers]);
+  }, [createRecognitionInstance, setupRecognitionHandlers, scheduleCycle]);
 
   const scheduleCycle = useCallback(() => {
     if (cycleTimerRef.current) {
