@@ -40,7 +40,7 @@ import { AudioLevelIndicator, AudioVolumeControl } from '@/components/speaking';
 import { useFullscreenTest } from '@/hooks/useFullscreenTest';
 import { compressAudio } from '@/utils/audioCompressor';
 import { useAdvancedSpeechAnalysis, SpeechAnalysisResult } from '@/hooks/useAdvancedSpeechAnalysis';
-import { InstantSpeechFeedback } from '@/components/speaking/InstantSpeechFeedback';
+// InstantSpeechFeedback import removed - confidence now shown in evaluation report only
 import { BrowserCompatibilityCheck } from '@/components/speaking/BrowserCompatibilityCheck';
 
 // IELTS Official Timings
@@ -170,9 +170,8 @@ export default function AIPracticeSpeakingTest() {
 
   // Speech analysis state for text-based evaluation
   const [segmentAnalyses, setSegmentAnalyses] = useState<Record<string, SpeechAnalysisResult>>({});
-  const [currentAnalysis, setCurrentAnalysis] = useState<SpeechAnalysisResult | null>(null);
-  const [showInstantFeedback, setShowInstantFeedback] = useState(false);
-  const [isAnalyzingFeedback, setIsAnalyzingFeedback] = useState(false); // Show "Analyzing..." state
+  // REMOVED: currentAnalysis and showInstantFeedback - confidence scores are now integrated into evaluation report only
+  const [isAnalyzingFeedback, setIsAnalyzingFeedback] = useState(false); // Show "Analyzing..." state after recording
   const [showLowVolumeWarning, setShowLowVolumeWarning] = useState(false); // Real-time volume warning
 
   // Advanced speech analysis hook
@@ -484,8 +483,6 @@ export default function AIPracticeSpeakingTest() {
     // Cancel any ongoing prompt audio AND prevent any pending retries/timeouts from firing.
     stopPromptAudio();
     activeSpeakSessionRef.current = null;
-    setShowInstantFeedback(false);
-    setCurrentAnalysis(null);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -576,23 +573,20 @@ export default function AIPracticeSpeakingTest() {
           clarityScore: analysis.overallClarityScore,
         });
         
-        // Show "Analyzing..." state for 3-4 seconds to make score feel calculated
+        // Show "Analyzing..." state briefly to indicate processing
         setIsAnalyzingFeedback(true);
-        setShowInstantFeedback(false);
         
-        // Random delay between 3-4 seconds for natural feel
-        const analysisDelay = 3000 + Math.random() * 1000;
+        // Random delay between 1-2 seconds for natural feel
+        const analysisDelay = 1000 + Math.random() * 1000;
         
         setTimeout(() => {
           setSegmentAnalyses(prev => ({
             ...prev,
             [key]: analysis,
           }));
-          setCurrentAnalysis(analysis);
           setIsAnalyzingFeedback(false);
-          setShowInstantFeedback(true);
-          // Auto-hide after 5 seconds
-          setTimeout(() => setShowInstantFeedback(false), 5000);
+          // Note: Confidence scores are now integrated into evaluation report only
+          // No instant feedback display - user will see results in the evaluation page
         }, analysisDelay);
       }
     }
@@ -1200,6 +1194,7 @@ export default function AIPracticeSpeakingTest() {
 
       // STEP 2: Call ASYNC evaluation - returns immediately with 202
       // Include transcript data for text-based evaluation (much cheaper than audio)
+      // cancelExisting: true ensures any stale jobs are cancelled before starting a new one
       const { data, error } = await supabase.functions.invoke('evaluate-speaking-async', {
         body: {
           testId,
@@ -1208,6 +1203,7 @@ export default function AIPracticeSpeakingTest() {
           topic: test?.topic,
           difficulty: test?.difficulty,
           fluencyFlag,
+          cancelExisting: true, // Cancel any existing pending jobs to avoid 429
           // Include text-based analysis data for cheaper evaluation
           transcripts: Object.keys(transcriptData).length > 0 ? transcriptData : undefined,
         },
@@ -2065,15 +2061,7 @@ export default function AIPracticeSpeakingTest() {
           </div>
         )}
 
-        {/* Instant Speech Feedback - shown briefly after recording stops */}
-        {showInstantFeedback && currentAnalysis && !isRecording && !isAnalyzingFeedback && (
-          <div className="mb-4 md:mb-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            <InstantSpeechFeedback 
-              analysis={currentAnalysis} 
-              showDisclaimer={true}
-            />
-          </div>
-        )}
+        {/* Confidence score feedback removed - now integrated into evaluation report */}
 
         {/* Low Volume Warning - shown during recording when mic input is low */}
         {isRecording && showLowVolumeWarning && (
