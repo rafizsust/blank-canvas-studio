@@ -10,53 +10,6 @@ interface SpeechRecognitionConfig {
   onEnd?: () => void;
 }
 
-interface SpeechRecognitionResult {
-  transcript: string;
-  isFinal: boolean;
-}
-
-// Browser SpeechRecognition types
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: {
-    isFinal: boolean;
-    [index: number]: { transcript: string };
-  };
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message?: string;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognition;
-    webkitSpeechRecognition: new () => SpeechRecognition;
-  }
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  onstart: (() => void) | null;
-  onend: (() => void) | null;
-  onspeechstart: (() => void) | null;
-  onspeechend: (() => void) | null;
-}
-
 export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -64,25 +17,25 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
   const [error, setError] = useState<Error | null>(null);
   const [isSupported, setIsSupported] = useState(true);
   
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<InstanceType<typeof window.SpeechRecognition> | null>(null);
   const isManualStop = useRef(false);
 
   // Initialize speech recognition
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     
-    if (!SpeechRecognition) {
+    if (!SpeechRecognitionAPI) {
       setIsSupported(false);
       setError(new Error('Speech recognition not supported in this browser'));
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRecognitionAPI();
     recognition.continuous = config.continuous ?? true;
     recognition.interimResults = config.interimResults ?? true;
     recognition.lang = config.language ?? 'en-GB'; // British English by default
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event) => {
       let finalTranscript = '';
       let interimText = '';
 
@@ -105,7 +58,7 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
       setInterimTranscript(interimText);
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event) => {
       // Ignore 'no-speech' and 'aborted' errors as they're common
       if (event.error === 'no-speech' || event.error === 'aborted') {
         return;
