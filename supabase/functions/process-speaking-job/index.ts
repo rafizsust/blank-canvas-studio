@@ -193,7 +193,7 @@ serve(async (req) => {
       
       // Update job with error
       const retryCount = (job.retry_count || 0) + 1;
-      const maxRetries = job.max_retries || 3;
+      const maxRetries = job.max_retries || 5; // Increased to 5 for more robust retrying
       
       if (retryCount >= maxRetries) {
         await supabaseService
@@ -641,6 +641,7 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
   const prompt = buildTextPrompt(transcripts, topic || testRow.topic, difficulty || testRow.difficulty, fluency_flag, testRow.payload);
 
   let evaluationResult: any = null;
+  const MAX_KEY_RETRIES = 3; // Retry each key up to 3 times with backoff
 
   for (const candidateKey of keyQueue) {
     if (evaluationResult) break;
@@ -650,43 +651,81 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
     for (const modelName of TEXT_MODELS) {
       if (evaluationResult) break;
 
-      try {
-        console.log(`[processTextBasedEvaluation] Trying ${modelName}`);
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: { temperature: 0.3, maxOutputTokens: 8000 },
-        });
+      // Retry loop with exponential backoff for each model
+      for (let attempt = 0; attempt < MAX_KEY_RETRIES; attempt++) {
+        try {
+          console.log(`[processTextBasedEvaluation] Trying ${modelName} (attempt ${attempt + 1}/${MAX_KEY_RETRIES})`);
+          
+          // Update heartbeat to prevent watchdog from killing us
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({ heartbeat_at: new Date().toISOString() })
+            .eq('id', jobId);
+          
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            generationConfig: { temperature: 0.3, maxOutputTokens: 8000 },
+          });
 
-        const response = await model.generateContent(prompt);
-        const text = response.response?.text?.() || '';
+          const response = await model.generateContent(prompt);
+          const text = response.response?.text?.() || '';
 
-        if (!text) continue;
+          if (!text) {
+            console.warn(`[processTextBasedEvaluation] Empty response from ${modelName}`);
+            break; // Move to next model
+          }
 
-        const parsed = parseJson(text);
-        if (parsed) {
-          evaluationResult = parsed;
-          console.log(`[processTextBasedEvaluation] Success with ${modelName}`);
+          const parsed = parseJson(text);
+          if (parsed) {
+            evaluationResult = parsed;
+            console.log(`[processTextBasedEvaluation] Success with ${modelName} on attempt ${attempt + 1}`);
+            break;
+          } else {
+            console.warn(`[processTextBasedEvaluation] Failed to parse JSON from ${modelName}`);
+            break; // Move to next model
+          }
+        } catch (err: any) {
+          const errMsg = String(err?.message || '');
+          console.error(`[processTextBasedEvaluation] ${modelName} error (attempt ${attempt + 1}):`, errMsg.slice(0, 200));
+
+          // Check for PERMANENT daily quota exhaustion
+          if (isDailyQuotaExhaustedError(err)) {
+            console.log(`[processTextBasedEvaluation] Daily quota exhausted for ${modelName}, marking model exhausted`);
+            if (!candidateKey.isUserProvided && candidateKey.keyId) {
+              await markModelQuotaExhausted(supabaseService, candidateKey.keyId, modelName);
+            }
+            break; // Move to next key - this model is done for the day
+          }
+
+          // Check for temporary rate limit errors - retry with backoff
+          if (isQuotaExhaustedError(errMsg)) {
+            const retryAfter = extractRetryAfterSeconds(err);
+            if (attempt < MAX_KEY_RETRIES - 1) {
+              const delay = retryAfter 
+                ? Math.min(retryAfter * 1000, 60000) 
+                : exponentialBackoffWithJitter(attempt, 2000, 60000);
+              console.log(`[processTextBasedEvaluation] Rate limited, retrying in ${Math.round(delay / 1000)}s...`);
+              await sleep(delay);
+              continue;
+            }
+          }
+
+          // For transient errors, also retry with backoff
+          if (attempt < MAX_KEY_RETRIES - 1) {
+            const delay = exponentialBackoffWithJitter(attempt, 1000, 30000);
+            console.log(`[processTextBasedEvaluation] Transient error, retrying in ${Math.round(delay / 1000)}s...`);
+            await sleep(delay);
+            continue;
+          }
+          
+          // All retries exhausted for this model, move to next
           break;
         }
-      } catch (err: any) {
-        const errMsg = String(err?.message || '');
-        console.error(`[processTextBasedEvaluation] ${modelName} error:`, errMsg.slice(0, 200));
-
-        // ONLY mark quota exhausted for PERMANENT daily quota errors, NOT rate limits
-        if (isDailyQuotaExhaustedError(err)) {
-          console.log(`[processTextBasedEvaluation] Daily quota exhausted for ${modelName}, marking model exhausted`);
-          if (!candidateKey.isUserProvided && candidateKey.keyId) {
-            await markModelQuotaExhausted(supabaseService, candidateKey.keyId, modelName);
-          }
-        }
-        // For rate limits (isQuotaExhaustedError but not isDailyQuotaExhaustedError), just continue without marking
-        // Continue to try next model/key
-        continue;
       }
     }
   }
 
-  if (!evaluationResult) throw new Error('Text evaluation failed: all models/keys exhausted');
+  if (!evaluationResult) throw new Error('Text evaluation failed: all models/keys exhausted after retries');
 
   const overallBand = evaluationResult.overall_band || calculateBand(evaluationResult);
 

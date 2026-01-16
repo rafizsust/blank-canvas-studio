@@ -28,7 +28,7 @@ interface UseSpeakingEvaluationRealtimeOptions {
   pollInterval?: number; // Fallback polling interval in ms
 }
 
-const DEFAULT_KICK_AFTER_MS = 2.5 * 60 * 1000; // 2.5 minutes
+const DEFAULT_KICK_AFTER_MS = 60 * 1000; // 1 minute - kick watchdog earlier if job seems stuck
 
 export function useSpeakingEvaluationRealtime({
   testId,
