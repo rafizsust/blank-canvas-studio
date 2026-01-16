@@ -186,13 +186,18 @@ export function SimulatedAudioPlayer({
 
     const applyVoiceSettings = (utterance: SpeechSynthesisUtterance) => {
       const voice = getBestVoice();
-      if (voice) utterance.voice = voice;
+      if (voice) {
+        utterance.voice = voice;
+        console.log('[SimulatedAudio] Using voice:', voice.name);
+      } else {
+        console.warn('[SimulatedAudio] No voice found, using default');
+      }
       utterance.rate = playbackRate * 0.9;
       utterance.pitch = 1;
       utterance.volume = isMuted ? 0 : volume;
     };
 
-    const speakChunk = (index: number) => {
+    const speakChunk = (index: number, retryCount = 0) => {
       if (ttsSessionRef.current !== mySession) return;
 
       // Clear any existing Edge safety timers
@@ -316,17 +321,28 @@ export function SimulatedAudioPlayer({
 
       window.speechSynthesis.speak(utterance);
       
-      // Edge workaround: Set a STARTUP timeout - if onstart doesn't fire within 3 seconds,
-      // the TTS is stuck and we need to force progression
+      // Edge workaround: Set a STARTUP timeout - if onstart doesn't fire within 2 seconds,
+      // retry with a fresh utterance (voices may not be loaded yet)
       if (browserInfo.isEdge) {
-        console.log(`[SimulatedAudio Edge] Startup timer set for 3000ms - chunk ${index + 1}`);
+        const startupTimeout = retryCount === 0 ? 2000 : 3000;
+        console.log(`[SimulatedAudio Edge] Startup timer set for ${startupTimeout}ms - chunk ${index + 1}, retry ${retryCount}`);
         edgeStartupTimerRef.current = window.setTimeout(() => {
           if (ttsSessionRef.current === mySession && !onstartFired && !chunkEndFired) {
-            console.warn('[SimulatedAudio Edge] Startup timeout - onstart never fired, forcing progression');
-            window.speechSynthesis.cancel();
-            handleChunkEnd();
+            if (retryCount < 2) {
+              // Retry: cancel and try again - voices might be loaded now
+              console.warn(`[SimulatedAudio Edge] Startup timeout - retrying (attempt ${retryCount + 1})`);
+              window.speechSynthesis.cancel();
+              // Force voice refresh before retry
+              window.speechSynthesis.getVoices();
+              setTimeout(() => speakChunk(index, retryCount + 1), 100);
+            } else {
+              // Give up after 2 retries - skip to completion
+              console.warn('[SimulatedAudio Edge] Startup timeout - max retries reached, forcing progression');
+              window.speechSynthesis.cancel();
+              handleChunkEnd();
+            }
           }
-        }, 3000);
+        }, startupTimeout);
       }
     };
 
@@ -335,7 +351,32 @@ export function SimulatedAudioPlayer({
     setCurrentTime(0);
     pausedTimeRef.current = 0;
 
-    speakChunk(0);
+    // Edge workaround: Ensure voices are loaded before speaking
+    // Edge sometimes needs getVoices() called to trigger voice loading
+    if (browserInfo.isEdge) {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length === 0) {
+        console.log('[SimulatedAudio Edge] No voices loaded, waiting for voiceschanged...');
+        const voicesLoaded = () => {
+          window.speechSynthesis.onvoiceschanged = null;
+          console.log('[SimulatedAudio Edge] Voices loaded, starting speech');
+          speakChunk(0);
+        };
+        window.speechSynthesis.onvoiceschanged = voicesLoaded;
+        // Fallback: start anyway after 500ms if voices don't load
+        setTimeout(() => {
+          if (ttsSessionRef.current === mySession) {
+            window.speechSynthesis.onvoiceschanged = null;
+            console.log('[SimulatedAudio Edge] Fallback: starting speech without waiting for voices');
+            speakChunk(0);
+          }
+        }, 500);
+      } else {
+        speakChunk(0);
+      }
+    } else {
+      speakChunk(0);
+    }
   }, [text, getBestVoice, playbackRate, isMuted, volume, animateProgress, estimatedDuration, onComplete]);
 
   // Toggle play/pause
