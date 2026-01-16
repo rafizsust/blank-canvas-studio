@@ -1210,18 +1210,16 @@ export default function AIPracticeSpeakingTest() {
       // Include transcript data for text-based evaluation (much cheaper than audio)
       // cancelExisting: true ensures any stale jobs are cancelled before starting a new one
       
-      // Debug: Log transcript data being sent for text-based evaluation
-      console.log('[AIPracticeSpeakingTest] Submitting transcript data:', {
-        hasTranscripts: Object.keys(transcriptData).length > 0,
-        transcriptKeys: Object.keys(transcriptData),
-        transcriptPreview: Object.fromEntries(
-          Object.entries(transcriptData).map(([k, v]) => [k, {
-            rawLength: (v as any)?.rawTranscript?.length || 0,
-            cleanedLength: (v as any)?.cleanedTranscript?.length || 0,
-            wordCount: (v as any)?.wordConfidences?.length || 0,
-          }])
-        ),
-      });
+      // Debug: Log FULL transcript text for each speaking question
+      console.log('[AIPracticeSpeakingTest] === SPEAKING SUBMISSION TRANSCRIPTS ===');
+      for (const [key, value] of Object.entries(transcriptData)) {
+        const v = value as any;
+        console.log(`[AIPracticeSpeakingTest] ${key}:`);
+        console.log(`  Raw: ${v?.rawTranscript || '(empty)'}`);
+        console.log(`  Cleaned: ${v?.cleanedTranscript || '(empty)'}`);
+        console.log(`  Word count: ${v?.wordConfidences?.length || 0}`);
+      }
+      console.log('[AIPracticeSpeakingTest] === END TRANSCRIPTS ===');
       
       const { data, error } = await supabase.functions.invoke('evaluate-speaking-async', {
         body: {

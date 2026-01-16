@@ -605,8 +605,8 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
     }
   }
 
-  // Fallback model included to avoid "stuck" runs if 2.5-flash is temporarily unavailable
-  const TEXT_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  // Only use gemini-2.5-flash - no fallback to older models
+  const TEXT_MODELS = ['gemini-2.5-flash'];
   const dbApiKeys = await getActiveGeminiKeysForModels(supabaseService, TEXT_MODELS);
   for (const dbKey of dbApiKeys) {
     keyQueue.push({ key: dbKey.key_value, keyId: dbKey.id, isUserProvided: false });
@@ -649,13 +649,16 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
         const errMsg = String(err?.message || '');
         console.error(`[processTextBasedEvaluation] ${modelName} error:`, errMsg.slice(0, 200));
 
-        if (isDailyQuotaExhaustedError(err) || isQuotaExhaustedError(errMsg)) {
+        // ONLY mark quota exhausted for PERMANENT daily quota errors, NOT rate limits
+        if (isDailyQuotaExhaustedError(err)) {
+          console.log(`[processTextBasedEvaluation] Daily quota exhausted for ${modelName}, marking model exhausted`);
           if (!candidateKey.isUserProvided && candidateKey.keyId) {
             await markModelQuotaExhausted(supabaseService, candidateKey.keyId, modelName);
           }
-          // Continue to try next model instead of breaking
-          continue;
         }
+        // For rate limits (isQuotaExhaustedError but not isDailyQuotaExhaustedError), just continue without marking
+        // Continue to try next model/key
+        continue;
       }
     }
   }
