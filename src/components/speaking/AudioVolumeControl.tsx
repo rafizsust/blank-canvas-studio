@@ -1,7 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Volume2, VolumeX } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+// localStorage keys for volume persistence
+const VOLUME_STORAGE_KEY = 'speaking_tts_volume';
+const MUTED_STORAGE_KEY = 'speaking_tts_muted';
 
 interface AudioVolumeControlProps {
   volume: number;
@@ -28,11 +32,45 @@ export function AudioVolumeControl({
   onTTSMutedChange,
 }: AudioVolumeControlProps) {
   const [showWaveform, setShowWaveform] = useState(false);
+  const hasInitialized = useRef(false);
 
   // Show waveform when audio is playing
   useEffect(() => {
     setShowWaveform(isPlaying);
   }, [isPlaying]);
+
+  // Restore volume state from localStorage on mount and sync with audio element
+  useEffect(() => {
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
+
+    try {
+      const savedVolume = localStorage.getItem(VOLUME_STORAGE_KEY);
+      const savedMuted = localStorage.getItem(MUTED_STORAGE_KEY);
+      
+      if (savedVolume !== null) {
+        const vol = Math.max(0, Math.min(1, parseFloat(savedVolume)));
+        setVolume(vol);
+        onTTSVolumeChange?.(vol);
+        
+        // Sync with audio element if available
+        if (audioRef?.current) {
+          audioRef.current.volume = vol;
+        }
+      }
+      
+      if (savedMuted !== null) {
+        const muted = savedMuted === 'true';
+        setIsMuted(muted);
+        onTTSMutedChange?.(muted);
+        
+        // Sync with audio element if available
+        if (audioRef?.current) {
+          audioRef.current.muted = muted;
+        }
+      }
+    } catch {}
+  }, [setVolume, setIsMuted, audioRef, onTTSVolumeChange, onTTSMutedChange]);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVolume = parseInt(e.target.value) / 100;
