@@ -12,6 +12,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ModelAnswersAccordion } from '@/components/speaking/ModelAnswersAccordion';
 import { useSpeakingEvaluationRealtime } from '@/hooks/useSpeakingEvaluationRealtime';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Mic,
   RotateCcw,
@@ -31,6 +32,7 @@ import {
   Play,
   Clock,
   RefreshCw,
+  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -634,6 +636,18 @@ export default function AISpeakingResults() {
               Comprehensive analysis based on official IELTS 2025 criteria
             </p>
           </div>
+
+          {/* Text-Based Evaluation Disclaimer */}
+          {Object.keys(result.audio_urls || {}).length === 0 && (
+            <Alert className="mb-4 md:mb-6 border-warning/50 bg-warning/10">
+              <Info className="h-4 w-4 text-warning" />
+              <AlertDescription className="text-sm">
+                <strong>Text-Only Evaluation:</strong> This assessment was generated from browser speech recognition (text-only mode). 
+                Pronunciation scoring is estimated, and fluency analysis is based on text structure only. 
+                For more accurate pronunciation and fluency assessment, use <strong>Accuracy Mode</strong> which analyzes your actual audio recording.
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Overall Band Score */}
           <Card className="mb-4 md:mb-6 overflow-hidden">

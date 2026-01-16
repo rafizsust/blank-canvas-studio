@@ -187,20 +187,37 @@ ${fluencyFlag ? '⚠️ FLUENCY FLAG: Short Part 2 response (should be ~2 minute
 
 ${segmentSummaries}
 
+## ⚠️ CRITICAL ANTI-HALLUCINATION RULES - YOU MUST FOLLOW THESE
+1. **LEXICAL UPGRADES**: ONLY suggest upgrades for words/phrases that appear EXACTLY and VERBATIM in the transcripts above. Do NOT invent or assume words. If you cannot find simple words to upgrade, return an empty array for lexical_upgrades.
+
+2. **FLUENCY EVALUATION**: This is TEXT-ONLY evaluation from browser speech recognition. You CANNOT hear any audio. The browser has already cleaned and finalized the transcript before sending it to you. Therefore:
+   - Do NOT mention hesitations, self-corrections, or pauses UNLESS they are explicitly written in the transcript (e.g., "um", "uh", "like", "you know")
+   - Do NOT fabricate phrases like "I am wait" or "same, really difficult" - these are hallucinations
+   - ONLY evaluate the coherence, logical flow, and structure of the text as written
+
+3. **PRONUNCIATION**: You cannot assess pronunciation from text. Always score Band 6.0 with feedback: "Cannot be assessed from text - estimated score based on vocabulary complexity"
+
+4. **ALL EXAMPLES AND QUOTES**: Every word, phrase, or example you cite MUST exist verbatim in the provided transcripts. Do NOT fabricate any phrases. If quoting the candidate, copy-paste exactly from the transcript.
+
+5. **WEAKNESSES**: Only list issues that are visible in the written transcript text. Do NOT assume or invent issues like:
+   - "Frequent hesitation" (unless "um", "uh" etc. actually appear)
+   - "Self-correction" (unless visible in text like "I mean" followed by correction)
+   - "Long pauses" (you cannot detect pauses from text)
+
 ## IMPORTANT NOTES
-- These transcripts are from browser speech recognition - they may have minor errors
-- Base your evaluation on the CONTENT, vocabulary, and grammar visible in the text
-- For pronunciation: You cannot hear audio, so base this on complexity of vocabulary used and assume average pronunciation (Band 6) unless content suggests otherwise
+- These transcripts are from browser speech recognition - they may have minor errors but have been finalized by the browser
+- Base your evaluation on the CONTENT, vocabulary, grammar, and coherence visible in the text ONLY
+- When in doubt, DO NOT include information you're not 100% sure is from the transcript
 
 ## OUTPUT (JSON only)
 \`\`\`json
 {
   "overall_band": 6.5,
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": [], "weaknesses": [] },
-    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [], "lexical_upgrades": [{"original": "good", "upgraded": "exceptional", "context": "..."}] },
+    "fluency_coherence": { "band": 6.5, "feedback": "Based on text structure and coherence only (audio not available)", "strengths": [], "weaknesses": [] },
+    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [], "lexical_upgrades": [{"original": "EXACT word from transcript", "upgraded": "better alternative", "context": "quote from transcript showing the word"}] },
     "grammatical_range": { "band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [] },
-    "pronunciation": { "band": 6.0, "feedback": "Estimated from text complexity", "strengths": [], "weaknesses": [] }
+    "pronunciation": { "band": 6.0, "feedback": "Cannot be assessed from text - estimated score based on vocabulary complexity", "strengths": [], "weaknesses": [] }
   },
   "improvement_priorities": ["...", "..."],
   "examiner_notes": "..."
