@@ -256,18 +256,52 @@ serve(async (req) => {
       1: [], 2: [], 3: []
     };
     
+    // Extract cue card topics from old-format payloads (part1, part2, part3 objects)
+    const cueCardByPart: Record<number, string> = {};
+    for (const partKey of ['part1', 'part2', 'part3']) {
+      const partNum = Number(partKey.replace('part', ''));
+      const partData = payload?.[partKey];
+      if (partData?.cue_card) {
+        cueCardByPart[partNum] = String(partData.cue_card);
+      }
+    }
+    
     for (const segmentKey of Object.keys(googleFileUris)) {
+      // Match segment keys like: part2-qp2-q1-bafadaa1 or part1-q<questionId>
       const m = String(segmentKey).match(/^part([123])\-q(.+)$/);
       if (!m) continue;
+      
+      const partNumber = Number(m[1]) as 1 | 2 | 3;
       const questionId = m[2];
+      
+      // First try to find in the speakingParts format
       const q = questionById.get(questionId);
-      if (!q) continue;
-      segmentsByPart[q.partNumber].push({ 
-        segmentKey, 
-        partNumber: q.partNumber, 
-        questionNumber: q.questionNumber,
-        questionText: q.questionText,
-      });
+      if (q) {
+        segmentsByPart[q.partNumber].push({ 
+          segmentKey, 
+          partNumber: q.partNumber, 
+          questionNumber: q.questionNumber,
+          questionText: q.questionText,
+        });
+      } else {
+        // Fallback: If no match in questionById, use the part number from the segment key itself
+        // This handles old-format presets that don't have speakingParts array
+        // Try to extract question number from the segment key (e.g., "p2-q1-bafadaa1" -> q1 = question 1)
+        const qNumMatch = questionId.match(/q(\d+)/);
+        const questionNumber = qNumMatch ? Number(qNumMatch[1]) : 1;
+        
+        // Use cue card as question text if available for this part
+        const questionText = cueCardByPart[partNumber] || `Part ${partNumber} Question ${questionNumber}`;
+        
+        console.log(`[speaking-evaluate-job] Fallback segment mapping: ${segmentKey} -> Part ${partNumber}, Q${questionNumber}`);
+        
+        segmentsByPart[partNumber].push({ 
+          segmentKey, 
+          partNumber, 
+          questionNumber,
+          questionText,
+        });
+      }
     }
 
     // Sort segments within each part
