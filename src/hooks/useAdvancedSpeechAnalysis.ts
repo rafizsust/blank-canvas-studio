@@ -2,15 +2,20 @@
  * Advanced Speech Analysis Hook
  * Orchestrates browser-adaptive speech recognition and audio analysis for text-based evaluation
  *
- * BROWSER-ADAPTIVE DESIGN:
- * - Edge: Natural mode (no forced language), preserves fillers and pauses
- * - Chrome: Forced accent for stability, ghost word tracking
- *
- * CRITICAL: SINGLE SpeechRecognition INSTANCE per session
- * - No primary/secondary recognizers
- * - No seamless overlap cycling
- * - Proactive restart via watchdog (stop only)
- * - Restart occurs ONLY inside onend (same instance)
+ * ARCHITECTURE PRINCIPLES (ACCURACY FIRST):
+ * 
+ * 1. CAPTURE EVERYTHING THE USER SAYS
+ *    - No aggressive deduplication that removes legitimate repeated sentences
+ *    - No ghost word recovery that corrupts transcripts
+ *    - Simple exact-duplicate prevention only
+ * 
+ * 2. SINGLE SpeechRecognition INSTANCE per session
+ *    - Proactive restart via watchdog (stop only)
+ *    - Restart occurs ONLY inside onend (same instance)
+ * 
+ * 3. BROWSER-ADAPTIVE CONFIG
+ *    - Chrome: User-selected accent, controlled cycling
+ *    - Edge: Auto-detect language, more tolerance
  */
 
 import { useState, useRef, useCallback } from 'react';
@@ -21,7 +26,6 @@ import { calculateFluency, FluencyMetrics, createEmptyFluencyMetrics } from '@/l
 import {
   detectBrowser,
   PauseTracker,
-  GhostWordTracker,
   getStoredAccent,
   BrowserInfo
 } from '@/lib/speechRecognition';
@@ -36,7 +40,7 @@ export interface SpeechAnalysisResult {
   durationMs: number;
   overallClarityScore: number;     // 0-100
   // Browser-adaptive additions
-  ghostWords: string[];            // Recovered filler words (Chrome only)
+  ghostWords: string[];            // DEPRECATED: Always empty now (ghost recovery removed)
   pauseBreakdowns: number;         // Number of significant pauses
   browserMode: 'edge-natural' | 'chrome-accent' | 'other';
 }
@@ -45,7 +49,7 @@ interface UseAdvancedSpeechAnalysisOptions {
   language?: string;
   onInterimResult?: (transcript: string) => void;
   onError?: (error: Error) => void;
-  onGhostWordRecovered?: (word: string) => void;
+  onGhostWordRecovered?: (word: string) => void; // DEPRECATED: No longer called
 }
 
 // Browser SpeechRecognition types
@@ -132,7 +136,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   // Watchdog timer
   const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const finalTranscriptRef = useRef('');
+  // CRITICAL: Append-only transcript storage
+  // We ONLY append new final results, never modify or deduplicate
+  const finalSegmentsRef = useRef<string[]>([]);
+  
   const startTimeRef = useRef(0);
   const isAnalyzingRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -140,15 +147,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
 
   // Browser-adaptive tracking
   const pauseTrackerRef = useRef<PauseTracker | null>(null);
-  const ghostTrackerRef = useRef<GhostWordTracker | null>(null);
-  const ghostWordsRef = useRef<string[]>([]);
   const consecutiveFailuresRef = useRef(0);
-  const lastProcessedTextRef = useRef(new Set<string>());
-  const lastFinalTextRef = useRef('');
   
-  // CRITICAL: Track last interim text to preserve during restart
-  // This captures words that might be lost during the stop/start gap
-  const lastInterimTextRef = useRef('');
+  // Simple exact-duplicate prevention (only prevents the EXACT same segment from being added twice in a row)
+  const lastExactFinalRef = useRef('');
 
   // Timing
   const sessionStartRef = useRef(0);
@@ -192,11 +194,14 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
 
   /**
    * Handle speech recognition results
+   * 
+   * CRITICAL: This is the SIMPLE, ROBUST version.
+   * - No overlap detection (it was removing repeated sentences)
+   * - No ghost word recovery (it was corrupting transcripts)
+   * - Only exact-duplicate prevention for immediate back-to-back duplicates
    */
   const handleResult = useCallback((event: SpeechRecognitionEvent) => {
     if (!isAnalyzingRef.current) return;
-
-    const browser = browserRef.current;
 
     // Record speech event for pause tracking
     pauseTrackerRef.current?.recordSpeechEvent();
@@ -205,121 +210,44 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     consecutiveFailuresRef.current = 0;
 
     let interimText = '';
-    let newFinalText = '';
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const result = event.results[i];
       const text = result[0].transcript;
 
       if (result.isFinal) {
-        // CRITICAL: Improved deduplication using suffix-based detection
-        // This prevents losing new content when Chrome sends overlapping results during restarts
-        const normalizedText = text.trim().toLowerCase();
-        const words = normalizedText.split(/\s+/).filter(w => w.length > 0);
+        const trimmed = text.trim();
         
-        // Skip if exact same text or empty
-        if (normalizedText === lastFinalTextRef.current.toLowerCase() || words.length === 0) {
-          console.log('[SpeechAnalysis] Skipping exact duplicate:', text.substring(0, 30));
+        // ONLY skip if this is EXACTLY the same as the last final (back-to-back duplicate)
+        // This prevents the SAME recognition result from being processed twice
+        // But ALLOWS the user to intentionally repeat sentences
+        if (trimmed === lastExactFinalRef.current) {
+          console.log('[SpeechAnalysis] Skipping exact back-to-back duplicate');
           continue;
         }
         
-        // Check for overlap with previous text using suffix matching
-        // This allows new content to be appended even if there's partial overlap
-        let newContent = text;
-        const lastWords = lastFinalTextRef.current.trim().toLowerCase().split(/\s+/).filter(w => w.length > 0);
-        
-        if (lastWords.length > 0 && words.length > 0) {
-          // Find the longest suffix of lastWords that is a prefix of words
-          let overlapLen = 0;
-          const maxCheck = Math.min(lastWords.length, words.length, 15); // Limit check for performance
+        if (trimmed.length > 0) {
+          // Store as the last exact final for duplicate check
+          lastExactFinalRef.current = trimmed;
           
-          for (let len = 1; len <= maxCheck; len++) {
-            const suffix = lastWords.slice(-len).join(' ');
-            const prefix = words.slice(0, len).join(' ');
-            if (suffix === prefix) {
-              overlapLen = len;
-            }
-          }
+          // APPEND to our segments array - never modify previous segments
+          finalSegmentsRef.current.push(trimmed);
           
-          if (overlapLen > 0) {
-            // Extract only the new portion after the overlap
-            const newWords = text.trim().split(/\s+/).slice(overlapLen);
-            if (newWords.length === 0) {
-              console.log('[SpeechAnalysis] Skipping fully overlapping segment:', text.substring(0, 30));
-              continue;
-            }
-            newContent = newWords.join(' ');
-            console.log(`[SpeechAnalysis] Overlap detected (${overlapLen} words), extracting new: "${newContent.substring(0, 40)}..."`);
-          }
+          // Track for word confidence
+          wordTrackerRef.current?.addSnapshot(trimmed, true);
+          
+          console.log('[SpeechAnalysis] Final segment added:', trimmed.substring(0, 60));
         }
-        
-        // Also check if this new content is a substring of recent finals (prevent duplicates from restarts)
-        const newNormalized = newContent.trim().toLowerCase();
-        let isDuplicate = false;
-        for (const processed of lastProcessedTextRef.current) {
-          if (processed.includes(newNormalized) && newNormalized.length > 3) {
-            isDuplicate = true;
-            console.log('[SpeechAnalysis] Skipping substring duplicate:', newContent.substring(0, 30));
-            break;
-          }
-        }
-        
-        if (isDuplicate) continue;
-        
-        // Track this segment to prevent future duplicates
-        lastProcessedTextRef.current.add(newNormalized);
-        lastFinalTextRef.current = (lastFinalTextRef.current + ' ' + newContent).trim();
-
-        // Keep set size manageable
-        if (lastProcessedTextRef.current.size > 50) {
-          const entries = Array.from(lastProcessedTextRef.current);
-          lastProcessedTextRef.current = new Set(entries.slice(-30));
-        }
-        
-        // Use the deduplicated new content instead of the full text
-        const textToProcess = newContent;
-
-        // CHROME: Extract ghost words before they disappear
-        // Use textToProcess (deduplicated content) for ghost word extraction
-        if (browser.isChrome && ghostTrackerRef.current) {
-          const finalWords = textToProcess.trim().split(/\s+/).filter((w: string) => w.length > 0);
-          const finalWordsSet = new Set<string>(finalWords.map((w: string) => w.toLowerCase()));
-          const recovered = ghostTrackerRef.current.extractAcceptedGhosts(finalWordsSet);
-
-          if (recovered.length > 0) {
-            console.log('[SpeechAnalysis] Recovered ghost words:', recovered);
-            ghostWordsRef.current.push(...recovered);
-            recovered.forEach(word => options.onGhostWordRecovered?.(word));
-          }
-        }
-
-        // Use textToProcess (deduplicated content) to prevent duplicates in final transcript
-        newFinalText += textToProcess + ' ';
-        wordTrackerRef.current?.addSnapshot(textToProcess, true);
-        console.log('[SpeechAnalysis] Final:', textToProcess.substring(0, 50));
       } else {
         interimText += text;
         wordTrackerRef.current?.addSnapshot(text, false);
-
-        // CHROME: Track interim words for ghost detection
-        if (browser.isChrome && ghostTrackerRef.current) {
-          const interimWords = text.trim().split(/\s+/).filter((w: string) => w.length > 0);
-          ghostTrackerRef.current.trackInterimWords(interimWords);
-        }
       }
     }
 
-    if (newFinalText) {
-      finalTranscriptRef.current += newFinalText;
-    }
-
-    // CRITICAL: Store interim text for potential recovery during restart
-    // This captures words that might be lost when watchdog triggers stop()
-    if (interimText.trim()) {
-      lastInterimTextRef.current = interimText.trim();
-    }
-
-    const combined = (finalTranscriptRef.current + interimText).trim();
+    // Build combined transcript from all segments + current interim
+    const finalPart = finalSegmentsRef.current.join(' ');
+    const combined = (finalPart + ' ' + interimText).trim();
+    
     setInterimTranscript(combined);
     options.onInterimResult?.(combined);
   }, [options]);
@@ -343,8 +271,6 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   /**
    * Handle recognition end with SAFE restart.
    * IMPORTANT: NEVER create a new instance here.
-   * 
-   * ENHANCED: Preserves interim text that might be lost during restart gap
    */
   const handleEnd = useCallback(() => {
     if (!isAnalyzingRef.current) return;
@@ -355,36 +281,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       isAnalyzing: isAnalyzingRef.current,
       isManualStop: isManualStopRef.current,
       isRestarting: isRestartingRef.current,
-      lastInterim: lastInterimTextRef.current?.substring(0, 30),
+      segmentCount: finalSegmentsRef.current.length,
     });
 
     if (!isAnalyzingRef.current || isManualStopRef.current) return;
-
-    // CRITICAL FIX: If we have interim text when stopping, promote it to final
-    // This prevents losing words that were in-progress during restart
-    if (isRestartingRef.current && lastInterimTextRef.current && browser.isChrome) {
-      const interimToPromote = lastInterimTextRef.current.trim();
-      if (interimToPromote.length > 0) {
-        // Check if this interim text is meaningfully different from last final
-        const lastFinalWords = lastFinalTextRef.current.toLowerCase().split(/\s+/).slice(-10);
-        const interimWords = interimToPromote.toLowerCase().split(/\s+/);
-        
-        // Find words in interim that are NOT in recent finals
-        const newWords = interimWords.filter(w => 
-          w.length > 2 && !lastFinalWords.includes(w)
-        );
-        
-        if (newWords.length >= 2) {
-          console.log('[SpeechAnalysis] Promoting interim to final before restart:', newWords.join(' '));
-          // Only add the new words to prevent duplicates
-          const newContent = newWords.join(' ');
-          finalTranscriptRef.current += ' ' + newContent;
-          lastFinalTextRef.current = (lastFinalTextRef.current + ' ' + newContent).trim();
-        }
-      }
-      // Clear the interim ref after processing
-      lastInterimTextRef.current = '';
-    }
 
     // Only restart if we intentionally stopped OR if browser cut off unexpectedly.
     // In both cases we restart the SAME instance.
@@ -399,6 +299,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       // Reset the per-session timer
       sessionStartRef.current = Date.now();
       isRestartingRef.current = false;
+      
+      // Clear the exact-match duplicate check for new session
+      // This allows repeated content across restart boundaries
+      lastExactFinalRef.current = '';
 
       try {
         recognitionRef.current?.start();
@@ -475,14 +379,14 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     setInterimTranscript('');
     setCurrentRms(0);
 
-    finalTranscriptRef.current = '';
+    // CRITICAL: Reset to empty segments array
+    finalSegmentsRef.current = [];
+    lastExactFinalRef.current = '';
+    
     startTimeRef.current = Date.now();
     sessionStartRef.current = Date.now();
 
-    ghostWordsRef.current = [];
     consecutiveFailuresRef.current = 0;
-    lastProcessedTextRef.current = new Set();
-    lastFinalTextRef.current = '';
 
     // Request screen wake lock
     try {
@@ -497,10 +401,6 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     // Initialize browser-adaptive trackers
     pauseTrackerRef.current = new PauseTracker();
     pauseTrackerRef.current.start();
-
-    if (browser.isChrome) {
-      ghostTrackerRef.current = new GhostWordTracker();
-    }
 
     // Start audio feature extraction
     audioExtractorRef.current = new AudioFeatureExtractor();
@@ -546,7 +446,9 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   const stop = useCallback((): SpeechAnalysisResult | null => {
     const browser = browserRef.current;
 
-    console.log('[SpeechAnalysis] Stopping...');
+    console.log('[SpeechAnalysis] Stopping...', {
+      segmentCount: finalSegmentsRef.current.length,
+    });
 
     // Prevent any restart paths
     isManualStopRef.current = true;
@@ -591,14 +493,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     const audioAnalysis = audioExtractorRef.current?.stop() || AudioFeatureExtractor.createEmptyResult();
     const prosodyMetrics = analyzeProsody(audioAnalysis);
 
-    // Get final transcript (include ghost words for raw transcript)
-    const baseTranscript = finalTranscriptRef.current.trim() || interimTranscript.trim();
-
-    // Build raw transcript with recovered ghost words
-    const ghostWords = ghostWordsRef.current;
-    const rawTranscript = ghostWords.length > 0
-      ? `${baseTranscript} [recovered: ${ghostWords.join(', ')}]`
-      : baseTranscript;
+    // Build final transcript from all segments
+    const rawTranscript = finalSegmentsRef.current.join(' ').trim();
+    
+    console.log('[SpeechAnalysis] Final transcript:', rawTranscript.substring(0, 100));
 
     // Silence Safety Gate
     const isSilentAudio = audioAnalysis.silenceRatio > 0.95 && audioAnalysis.averageRms < 0.01;
@@ -607,13 +505,13 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       return null;
     }
 
-    if (!baseTranscript) {
+    if (!rawTranscript) {
       return null;
     }
 
     // Calculate word confidences
-    const wordConfidences = wordTrackerRef.current?.getWordConfidences(baseTranscript) ||
-                            WordConfidenceTracker.createEmptyConfidences(baseTranscript);
+    const wordConfidences = wordTrackerRef.current?.getWordConfidences(rawTranscript) ||
+                            WordConfidenceTracker.createEmptyConfidences(rawTranscript);
 
     const durationMs = Date.now() - startTimeRef.current;
 
@@ -624,7 +522,7 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       durationMs
     );
 
-    // Create cleaned transcript
+    // Create cleaned transcript (remove fillers and repeats)
     const cleanedTranscript = wordConfidences
       .filter(w => !w.isFiller && !w.isRepeat)
       .map(w => w.word)
@@ -660,11 +558,11 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       audioAnalysis,
       durationMs,
       overallClarityScore,
-      ghostWords,
+      ghostWords: [], // DEPRECATED: No longer used
       pauseBreakdowns: pauseMetrics?.fluencyBreakdowns || 0,
       browserMode,
     };
-  }, [interimTranscript, startWatchdog, stopWatchdog]);
+  }, [stopWatchdog]);
 
   const abort = useCallback(() => {
     console.log('[SpeechAnalysis] Aborting...');
@@ -704,7 +602,6 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     }
 
     pauseTrackerRef.current = null;
-    ghostTrackerRef.current = null;
     wordTrackerRef.current = null;
   }, [stopWatchdog]);
 

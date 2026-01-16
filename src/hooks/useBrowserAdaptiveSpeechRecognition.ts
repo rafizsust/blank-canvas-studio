@@ -1,34 +1,29 @@
 /**
  * Browser-Adaptive Speech Recognition Hook
  * 
- * ARCHITECTURE PRINCIPLES (per Senior Speech Recognition Engineer spec):
+ * ARCHITECTURE PRINCIPLES (ACCURACY FIRST):
  * 
- * 1. ONE CENTRAL RECOGNITION INSTANCE per session
+ * 1. CAPTURE EVERYTHING THE USER SAYS
+ *    - No aggressive deduplication that removes legitimate repeated sentences
+ *    - No ghost word recovery that corrupts transcripts
+ *    - Simple exact-duplicate prevention only
+ * 
+ * 2. ONE CENTRAL RECOGNITION INSTANCE per session
  *    - Only create one SpeechRecognition object per recording session
  *    - Attach handlers once and never recreate mid-session
  * 
- * 2. SEPARATE TRANSCRIPT BUFFER
+ * 3. SEPARATE TRANSCRIPT BUFFER
  *    - Maintain own final/transcript storage
  *    - Don't rely on recognition's internal storage surviving restart
  * 
- * 3. PROACTIVE RESTART via watchdog timer (not reactive)
+ * 4. PROACTIVE RESTART via watchdog timer (not reactive)
  *    - Chrome: ~35s max session before proactive restart
  *    - Edge: ~45s max session before proactive restart
  *    - Never call start() inside onresult
  * 
- * 4. BROWSER-ADAPTIVE CONFIG
+ * 5. BROWSER-ADAPTIVE CONFIG
  *    - Chrome: User-selected accent, controlled cycling
  *    - Edge: Auto-detect language, more tolerance
- * 
- * 5. ERROR HANDLING
- *    - Differentiate genuine errors vs transient vs browser cutoffs
- *    - Small retry counter to avoid loops
- * 
- * 6. USER EXPERIENCE GUARANTEES
- *    - No repeated mic permission requests
- *    - Transcript accumulates seamlessly
- *    - UI never flashes "listening stopped"
- *    - Errors logged but not shown unless critical
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -38,7 +33,6 @@ import {
   BrowserInfo,
   PauseTracker,
   PauseMetrics,
-  GhostWordTracker,
   TranscriptState,
   SpeechRecognitionConfig,
   DEFAULT_CONFIG,
@@ -57,7 +51,7 @@ interface UseSpeechRecognitionReturn {
   finalTranscript: string;
   interimTranscript: string;
   words: TranscriptState['words'];
-  ghostWords: string[];
+  ghostWords: string[]; // DEPRECATED: Always empty
   pauseMetrics: PauseMetrics | null;
   sessionDuration: number;
   browser: BrowserInfo;
@@ -103,7 +97,6 @@ export function useBrowserAdaptiveSpeechRecognition(
   const [finalTranscript, setFinalTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [words, setWords] = useState<TranscriptState['words']>([]);
-  const [ghostWords, setGhostWords] = useState<string[]>([]);
   const [pauseMetrics, setPauseMetrics] = useState<PauseMetrics | null>(null);
   const [sessionDuration, setSessionDuration] = useState(0);
   const [selectedAccent, setSelectedAccent] = useState(() => config.accent || getStoredAccent());
@@ -132,14 +125,15 @@ export function useBrowserAdaptiveSpeechRecognition(
   const consecutiveFailuresRef = useRef(0);
   const transientRetryCountRef = useRef(0);
   
-  // Transcript deduplication
+  // CRITICAL: Append-only segment storage
+  const finalSegmentsRef = useRef<string[]>([]);
   const wordIdCounterRef = useRef(0);
-  const lastProcessedTextRef = useRef(new Set<string>());
-  const lastFinalTextRef = useRef('');
+  
+  // Simple exact-duplicate prevention (only prevents EXACT same segment back-to-back)
+  const lastExactFinalRef = useRef('');
   
   // Helpers
   const pauseTrackerRef = useRef(new PauseTracker());
-  const ghostTrackerRef = useRef(new GhostWordTracker());
   
   // ==================== SESSION DURATION DISPLAY ====================
   useEffect(() => {
@@ -248,6 +242,7 @@ export function useBrowserAdaptiveSpeechRecognition(
           
           isRestartingRef.current = false;
           sessionStartRef.current = Date.now();
+          lastExactFinalRef.current = ''; // Clear duplicate check for new session
           
           if (recognitionRef.current) {
             try {
@@ -270,6 +265,12 @@ export function useBrowserAdaptiveSpeechRecognition(
   }, [safeRestart]);
 
   // ==================== HANDLER: onresult ====================
+  /**
+   * CRITICAL: This is the SIMPLE, ROBUST version.
+   * - No overlap detection (it was removing repeated sentences)
+   * - No ghost word recovery (it was corrupting transcripts)
+   * - Only exact-duplicate prevention for immediate back-to-back duplicates
+   */
   const handleResult = useCallback((event: Event) => {
     if (!isRecordingRef.current) return;
     
@@ -284,7 +285,6 @@ export function useBrowserAdaptiveSpeechRecognition(
     
     const e = event as unknown as { resultIndex: number; results: SpeechRecognitionResultList };
     
-    let newFinalText = '';
     let newInterimText = '';
     const newWords: TranscriptState['words'] = [];
 
@@ -293,65 +293,51 @@ export function useBrowserAdaptiveSpeechRecognition(
       const transcript = result[0].transcript;
 
       if (result.isFinal) {
-        // CRITICAL: Deduplicate to prevent repeated text after restarts
-        const normalizedText = transcript.trim().toLowerCase();
-        if (lastProcessedTextRef.current.has(normalizedText) || transcript === lastFinalTextRef.current) {
-          console.log('[SpeechRecognition] Skipping duplicate final text');
+        const trimmed = transcript.trim();
+        
+        // ONLY skip if this is EXACTLY the same as the last final (back-to-back duplicate)
+        // This prevents the SAME recognition result from being processed twice
+        // But ALLOWS the user to intentionally repeat sentences
+        if (trimmed === lastExactFinalRef.current) {
+          console.log('[SpeechRecognition] Skipping exact back-to-back duplicate');
           continue;
         }
-
-        lastProcessedTextRef.current.add(normalizedText);
-        lastFinalTextRef.current = transcript;
-
-        // Keep set size manageable
-        if (lastProcessedTextRef.current.size > 50) {
-          const entries = Array.from(lastProcessedTextRef.current);
-          lastProcessedTextRef.current = new Set(entries.slice(-30));
-        }
-
-        const finalWords = transcript.trim().split(/\s+/).filter((w: string) => w.length > 0);
-        const finalWordsSet = new Set<string>(finalWords.map((w: string) => w.toLowerCase()));
-
-        // Ghost word recovery for Chrome
-        if (browser.isChrome) {
-          const recovered = ghostTrackerRef.current.extractAcceptedGhosts(finalWordsSet);
-          if (recovered.length > 0) {
-            console.log('[SpeechRecognition] Recovered ghost words:', recovered);
-            setGhostWords(prev => [...prev, ...recovered]);
-          }
-        }
-
-        finalWords.forEach((text: string) => {
-          newWords.push({
-            text,
-            timestamp: Date.now(),
-            wordId: wordIdCounterRef.current++,
-            isGhost: false,
-            isFiller: GhostWordTracker.isFillerWord(text)
+        
+        if (trimmed.length > 0) {
+          // Store as the last exact final for duplicate check
+          lastExactFinalRef.current = trimmed;
+          
+          // APPEND to our segments array - never modify previous segments
+          finalSegmentsRef.current.push(trimmed);
+          
+          // Create word entries
+          const finalWords = trimmed.split(/\s+/).filter((w: string) => w.length > 0);
+          finalWords.forEach((text: string) => {
+            newWords.push({
+              text,
+              timestamp: Date.now(),
+              wordId: wordIdCounterRef.current++,
+              isGhost: false,
+              isFiller: false // Simple mode - no filler detection here
+            });
           });
-        });
-        newFinalText += transcript + ' ';
-        console.log('[SpeechRecognition] Final:', transcript.substring(0, 50));
+          
+          console.log('[SpeechRecognition] Final segment added:', trimmed.substring(0, 50));
+        }
       } else {
         newInterimText = transcript;
-        // Track ghost words in Chrome
-        if (browser.isChrome) {
-          ghostTrackerRef.current.trackInterimWords(
-            transcript.trim().split(/\s+/).filter((w: string) => w.length > 0)
-          );
-        }
       }
     }
 
     // Update state with new transcripts
-    if (newFinalText) {
-      const trimmed = newFinalText.trim();
-      setFinalTranscript(prev => (prev ? `${prev} ${trimmed}` : trimmed).trim());
-      setRawTranscript(prev => (prev ? `${prev} ${trimmed}` : trimmed).trim());
+    if (newWords.length > 0) {
+      const fullTranscript = finalSegmentsRef.current.join(' ');
+      setFinalTranscript(fullTranscript);
+      setRawTranscript(fullTranscript);
       setWords(prev => [...prev, ...newWords]);
     }
     setInterimTranscript(newInterimText);
-  }, [browser.isChrome, resetSilenceTimeout]);
+  }, [resetSilenceTimeout]);
 
   // ==================== HANDLER: onerror ====================
   const handleError = useCallback((event: Event) => {
@@ -390,7 +376,8 @@ export function useBrowserAdaptiveSpeechRecognition(
     console.log('[SpeechRecognition] onend fired', {
       isRecording: isRecordingRef.current,
       isManualStop: isManualStopRef.current,
-      isRestarting: isRestartingRef.current
+      isRestarting: isRestartingRef.current,
+      segmentCount: finalSegmentsRef.current.length
     });
     
     // If user stopped or we're in manual stop mode, don't restart
@@ -411,6 +398,7 @@ export function useBrowserAdaptiveSpeechRecognition(
         
         isRestartingRef.current = false;
         sessionStartRef.current = Date.now();
+        lastExactFinalRef.current = ''; // Clear duplicate check for new session
         
         if (recognitionRef.current) {
           try {
@@ -441,6 +429,7 @@ export function useBrowserAdaptiveSpeechRecognition(
       
       isRestartingRef.current = false;
       sessionStartRef.current = Date.now();
+      lastExactFinalRef.current = ''; // Clear duplicate check for new session
       
       if (recognitionRef.current) {
         try {
@@ -546,9 +535,11 @@ export function useBrowserAdaptiveSpeechRecognition(
     isRestartingRef.current = false;
     consecutiveFailuresRef.current = 0;
     transientRetryCountRef.current = 0;
-    lastProcessedTextRef.current = new Set();
-    lastFinalTextRef.current = '';
     wordIdCounterRef.current = 0;
+    
+    // CRITICAL: Reset to empty segments array
+    finalSegmentsRef.current = [];
+    lastExactFinalRef.current = '';
     
     // Timing
     const now = Date.now();
@@ -558,7 +549,6 @@ export function useBrowserAdaptiveSpeechRecognition(
     
     // Helpers
     pauseTrackerRef.current.start();
-    ghostTrackerRef.current.reset();
     
     // Start recognition
     try {
@@ -573,7 +563,9 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   // ==================== PUBLIC: stopListening ====================
   const stopListening = useCallback(() => {
-    console.log('[SpeechRecognition] Stopping...');
+    console.log('[SpeechRecognition] Stopping...', {
+      segmentCount: finalSegmentsRef.current.length
+    });
     
     // Set flags FIRST to prevent any restart attempts
     isManualStopRef.current = true;
@@ -639,13 +631,11 @@ export function useBrowserAdaptiveSpeechRecognition(
     setFinalTranscript('');
     setInterimTranscript('');
     setWords([]);
-    setGhostWords([]);
     setPauseMetrics(null);
     setSessionDuration(0);
     wordIdCounterRef.current = 0;
-    lastProcessedTextRef.current = new Set();
-    lastFinalTextRef.current = '';
-    ghostTrackerRef.current.reset();
+    finalSegmentsRef.current = [];
+    lastExactFinalRef.current = '';
     pauseTrackerRef.current.reset();
   }, []);
 
@@ -670,7 +660,7 @@ export function useBrowserAdaptiveSpeechRecognition(
     finalTranscript,
     interimTranscript,
     words,
-    ghostWords,
+    ghostWords: [], // DEPRECATED: Always empty
     pauseMetrics,
     sessionDuration,
     browser,
