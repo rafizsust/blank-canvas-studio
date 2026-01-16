@@ -135,9 +135,20 @@ export default function AIPracticeSpeakingTest() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
 
-  // TTS state
-  const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(1); // Volume level 0-1
+  // TTS state - initialize from localStorage for persistence
+  const [isMuted, setIsMuted] = useState(() => {
+    try {
+      const saved = localStorage.getItem('speaking_tts_muted');
+      return saved === 'true';
+    } catch { return false; }
+  });
+  const [volume, setVolume] = useState(() => {
+    try {
+      const saved = localStorage.getItem('speaking_tts_volume');
+      if (saved) return Math.max(0, Math.min(1, parseFloat(saved)));
+    } catch {}
+    return 1;
+  });
   const [currentSpeakingText, setCurrentSpeakingText] = useState('');
 
   // Recording state

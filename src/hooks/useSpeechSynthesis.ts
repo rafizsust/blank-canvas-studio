@@ -14,11 +14,41 @@ interface SpeechSynthesisConfig {
 }
 
 // Track current volume/muted state at module level for access during speech
-let currentTTSVolume = 1;
-let currentTTSMuted = false;
+// Initialize from localStorage for persistence across page loads
+const VOLUME_STORAGE_KEY = 'speaking_tts_volume';
+const MUTED_STORAGE_KEY = 'speaking_tts_muted';
+
+const getSavedVolume = (): number => {
+  try {
+    const saved = localStorage.getItem(VOLUME_STORAGE_KEY);
+    if (saved) return Math.max(0, Math.min(1, parseFloat(saved)));
+  } catch {}
+  return 1;
+};
+
+const getSavedMuted = (): boolean => {
+  try {
+    const saved = localStorage.getItem(MUTED_STORAGE_KEY);
+    if (saved) return saved === 'true';
+  } catch {}
+  return false;
+};
+
+let currentTTSVolume = getSavedVolume();
+let currentTTSMuted = getSavedMuted();
 
 // Detect browser once at module level
 const browserInfo = detectBrowser();
+
+// Pre-load voices on module init to avoid delays when first speaking
+if (typeof window !== 'undefined' && window.speechSynthesis) {
+  // Trigger voice loading immediately
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => {
+    // Voices are now cached and ready
+    console.log('[TTS] Voices preloaded on module init');
+  };
+}
 
 export function useSpeechSynthesis(config: SpeechSynthesisConfig = {}) {
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -367,17 +397,17 @@ export function useSpeechSynthesis(config: SpeechSynthesisConfig = {}) {
 
           window.speechSynthesis.speak(utterance);
           
-          // Edge workaround: Set a STARTUP timeout - if onstart doesn't fire within 3 seconds,
-          // the TTS is stuck and we need to force progression
+          // Edge workaround: Set a STARTUP timeout - REDUCED from 3s to 1.5s for faster response
+          // If onstart doesn't fire, force progression to avoid blocking the user
           if (browserInfo.isEdge) {
-            console.log(`[TTS Edge] Startup timer set for 3000ms - chunk ${index + 1}`);
+            console.log(`[TTS Edge] Startup timer set for 1500ms - chunk ${index + 1}`);
             edgeStartupTimerRef.current = window.setTimeout(() => {
               if (activeSessionRef.current === sessionId && !onstartFired && !chunkEndFired) {
                 console.warn('[TTS Edge] Startup timeout - onstart never fired, forcing progression');
                 window.speechSynthesis.cancel();
                 handleChunkEnd();
               }
-            }, 3000);
+            }, 1500);
           }
         };
 
@@ -453,14 +483,32 @@ export function useSpeechSynthesis(config: SpeechSynthesisConfig = {}) {
     }
   }, [voices]);
 
-  // Set volume for TTS (0-1)
+  // Set volume for TTS (0-1) - persists to localStorage
   const setVolume = useCallback((vol: number) => {
     currentTTSVolume = Math.max(0, Math.min(1, vol));
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, String(currentTTSVolume));
+    } catch {}
+    
+    // Update current utterance volume immediately if speaking
+    if (utteranceRef.current && window.speechSynthesis?.speaking) {
+      // Note: Some browsers don't allow changing volume mid-speech
+      // In that case, we accept the delay - the new volume applies to the next chunk
+      utteranceRef.current.volume = currentTTSMuted ? 0 : currentTTSVolume;
+    }
   }, []);
 
-  // Set muted state for TTS
+  // Set muted state for TTS - persists to localStorage
   const setMuted = useCallback((muted: boolean) => {
     currentTTSMuted = muted;
+    try {
+      localStorage.setItem(MUTED_STORAGE_KEY, String(muted));
+    } catch {}
+    
+    // Update current utterance volume immediately if speaking
+    if (utteranceRef.current && window.speechSynthesis?.speaking) {
+      utteranceRef.current.volume = muted ? 0 : currentTTSVolume;
+    }
   }, []);
 
   return {

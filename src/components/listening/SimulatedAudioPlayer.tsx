@@ -358,23 +358,21 @@ export function SimulatedAudioPlayer({
 
       window.speechSynthesis.speak(utterance);
       
-      // Edge workaround: Set a STARTUP timeout - if onstart doesn't fire within 2 seconds,
-      // retry with a fresh utterance (voices may not be loaded yet)
+      // Edge workaround: Set a STARTUP timeout - REDUCED from 2s to 1s for faster response
+      // If onstart doesn't fire within 1 second, retry once then skip
       if (browserInfo.isEdge) {
-        const startupTimeout = retryCount === 0 ? 2000 : 3000;
+        const startupTimeout = retryCount === 0 ? 1000 : 1500;
         console.log(`[SimulatedAudio Edge] Startup timer set for ${startupTimeout}ms - chunk ${index + 1}, retry ${retryCount}`);
         edgeStartupTimerRef.current = window.setTimeout(() => {
           if (ttsSessionRef.current === mySession && !onstartFired && !chunkEndFired) {
-            if (retryCount < 2) {
-              // Retry: cancel and try again - voices might be loaded now
+            if (retryCount < 1) {
+              // Retry once: cancel and try again with a fresh utterance
               console.warn(`[SimulatedAudio Edge] Startup timeout - retrying (attempt ${retryCount + 1})`);
               window.speechSynthesis.cancel();
-              // Force voice refresh before retry
-              window.speechSynthesis.getVoices();
-              setTimeout(() => speakChunk(index, retryCount + 1), 100);
+              setTimeout(() => speakChunk(index, retryCount + 1), 50);
             } else {
-              // Give up after 2 retries - skip to completion
-              console.warn('[SimulatedAudio Edge] Startup timeout - max retries reached, forcing progression');
+              // Skip after 1 retry - don't block the user
+              console.warn('[SimulatedAudio Edge] Startup timeout - skipping to next chunk');
               window.speechSynthesis.cancel();
               handleChunkEnd();
             }
@@ -388,73 +386,38 @@ export function SimulatedAudioPlayer({
     setCurrentTime(0);
     pausedTimeRef.current = 0;
 
-    // Edge workaround: Prime the speech engine with a "wake up" call before speaking
-    // Edge's speech engine can be dormant and fail silently on first use
+    // OPTIMIZED: Start speech immediately - voices should already be loaded
+    // Edge workaround has been simplified to reduce lag
     if (browserInfo.isEdge) {
       const voices = window.speechSynthesis.getVoices();
       console.log('[SimulatedAudio Edge] Available voices:', voices.length);
       
       if (voices.length === 0) {
-        // Wait for voices to load
+        // Wait for voices to load - but with minimal delay
         console.log('[SimulatedAudio Edge] No voices loaded, waiting for voiceschanged...');
+        let voicesHandled = false;
+        
         const voicesLoaded = () => {
+          if (voicesHandled) return;
+          voicesHandled = true;
           window.speechSynthesis.onvoiceschanged = null;
-          console.log('[SimulatedAudio Edge] Voices loaded, priming engine...');
-          primeAndSpeak();
+          console.log('[SimulatedAudio Edge] Voices loaded, starting speech immediately');
+          speakChunk(0);
         };
         window.speechSynthesis.onvoiceschanged = voicesLoaded;
-        // Fallback: start anyway after 500ms
+        
+        // REDUCED: Fallback after only 100ms (voices are likely already cached)
         setTimeout(() => {
-          if (ttsSessionRef.current === mySession) {
-            window.speechSynthesis.onvoiceschanged = null;
-            console.log('[SimulatedAudio Edge] Fallback: starting without voice wait');
-            primeAndSpeak();
-          }
-        }, 500);
+          if (voicesHandled) return;
+          voicesHandled = true;
+          window.speechSynthesis.onvoiceschanged = null;
+          console.log('[SimulatedAudio Edge] Fallback: starting without voice wait');
+          speakChunk(0);
+        }, 100);
       } else {
-        primeAndSpeak();
-      }
-
-      // Prime the engine with a silent utterance, then speak
-      function primeAndSpeak() {
-        // Cancel and flush the queue
-        window.speechSynthesis.cancel();
-        
-        // Create a silent "wake up" utterance
-        const wakeUp = new SpeechSynthesisUtterance(' ');
-        wakeUp.volume = 0;
-        wakeUp.rate = 10; // Fastest possible to minimize delay
-        
-        const voice = getBestVoice();
-        if (voice) wakeUp.voice = voice;
-        
-        let wakeUpComplete = false;
-        
-        wakeUp.onend = () => {
-          if (wakeUpComplete) return;
-          wakeUpComplete = true;
-          console.log('[SimulatedAudio Edge] Wake-up complete, starting actual speech');
-          speakChunk(0);
-        };
-        
-        wakeUp.onerror = () => {
-          if (wakeUpComplete) return;
-          wakeUpComplete = true;
-          console.warn('[SimulatedAudio Edge] Wake-up failed, trying speech anyway');
-          speakChunk(0);
-        };
-        
-        // Timeout fallback in case wake-up never completes
-        setTimeout(() => {
-          if (!wakeUpComplete && ttsSessionRef.current === mySession) {
-            wakeUpComplete = true;
-            console.warn('[SimulatedAudio Edge] Wake-up timeout, proceeding with speech');
-            window.speechSynthesis.cancel();
-            speakChunk(0);
-          }
-        }, 500);
-        
-        window.speechSynthesis.speak(wakeUp);
+        // Voices already loaded - start immediately, no priming needed
+        console.log('[SimulatedAudio Edge] Voices ready, starting speech immediately');
+        speakChunk(0);
       }
     } else {
       speakChunk(0);

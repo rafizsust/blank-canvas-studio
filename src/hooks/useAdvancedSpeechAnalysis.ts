@@ -498,14 +498,19 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     
     console.log('[SpeechAnalysis] Final transcript:', rawTranscript.substring(0, 100));
 
-    // Silence Safety Gate
-    const isSilentAudio = audioAnalysis.silenceRatio > 0.95 && audioAnalysis.averageRms < 0.01;
+    // Silence Safety Gate - RELAXED thresholds to reduce false positives
+    // Previous: silenceRatio > 0.95 && averageRms < 0.01 was too aggressive
+    // Now: Only discard if COMPLETELY silent (silenceRatio > 0.99) AND extremely low RMS
+    const isSilentAudio = audioAnalysis.silenceRatio > 0.99 && audioAnalysis.averageRms < 0.005;
     if (isSilentAudio && rawTranscript.length > 0) {
       console.warn('[SpeechAnalysis] Silent audio with text detected - possible hallucination, discarding');
       return null;
     }
 
-    if (!rawTranscript) {
+    // Also allow through if we have a meaningful transcript (15+ chars) even with high silence
+    // This handles pauses between sentences which can inflate silenceRatio
+    if (!rawTranscript || (rawTranscript.length < 3 && audioAnalysis.silenceRatio > 0.90)) {
+      console.warn('[SpeechAnalysis] No meaningful speech detected');
       return null;
     }
 
