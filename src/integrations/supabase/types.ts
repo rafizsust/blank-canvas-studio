@@ -14,1812 +14,1041 @@ export type Database = {
   }
   public: {
     Tables: {
-      admin_users: {
+      admission_requests: {
         Row: {
+          approved_password: string | null
+          approved_shadow_id: string | null
+          bkash_transaction_id: string | null
+          class_name: string
           created_at: string
+          credentials_sent: boolean | null
+          credentials_sent_at: string | null
+          guardian_phone: string
           id: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "admin_users_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: true
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      ai_practice_results: {
-        Row: {
-          answers: Json
-          band_score: number | null
-          completed_at: string
-          created_at: string
-          id: string
-          module: string
-          question_results: Json
-          score: number
-          test_id: string
-          time_spent_seconds: number
-          total_questions: number
-          user_id: string
-        }
-        Insert: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          module: string
-          question_results?: Json
-          score?: number
-          test_id: string
-          time_spent_seconds?: number
-          total_questions?: number
-          user_id: string
-        }
-        Update: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          module?: string
-          question_results?: Json
-          score?: number
-          test_id?: string
-          time_spent_seconds?: number
-          total_questions?: number
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "ai_practice_results_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "ai_practice_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      ai_practice_tests: {
-        Row: {
-          audio_format: string | null
-          audio_url: string | null
-          difficulty: string
-          generated_at: string
-          id: string
-          is_preset: boolean | null
-          module: string
-          payload: Json
-          preset_id: string | null
-          question_type: string
-          sample_rate: number | null
-          time_minutes: number
-          topic: string
-          total_questions: number
-          user_id: string
-        }
-        Insert: {
-          audio_format?: string | null
-          audio_url?: string | null
-          difficulty: string
-          generated_at?: string
-          id?: string
-          is_preset?: boolean | null
-          module: string
-          payload?: Json
-          preset_id?: string | null
-          question_type: string
-          sample_rate?: number | null
-          time_minutes: number
-          topic: string
-          total_questions: number
-          user_id: string
-        }
-        Update: {
-          audio_format?: string | null
-          audio_url?: string | null
-          difficulty?: string
-          generated_at?: string
-          id?: string
-          is_preset?: boolean | null
-          module?: string
-          payload?: Json
-          preset_id?: string | null
-          question_type?: string
-          sample_rate?: number | null
-          time_minutes?: number
-          topic?: string
-          total_questions?: number
-          user_id?: string
-        }
-        Relationships: []
-      }
-      ai_practice_topic_completions: {
-        Row: {
-          completed_count: number
-          created_at: string
-          id: string
-          module: string
-          topic: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          completed_count?: number
-          created_at?: string
-          id?: string
-          module: string
-          topic: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          completed_count?: number
-          created_at?: string
-          id?: string
-          module?: string
-          topic?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      api_keys: {
-        Row: {
-          created_at: string
-          error_count: number
-          exp_pro_quota_exhausted: boolean | null
-          exp_pro_quota_exhausted_date: string | null
-          flash_2_5_quota_exhausted: boolean | null
-          flash_2_5_quota_exhausted_date: string | null
-          flash_lite_quota_exhausted: boolean | null
-          flash_lite_quota_exhausted_date: string | null
-          gemini_2_0_flash_exhausted: boolean | null
-          gemini_2_0_flash_exhausted_date: string | null
-          gemini_2_0_flash_lite_exhausted: boolean | null
-          gemini_2_0_flash_lite_exhausted_date: string | null
-          gemini_2_5_flash_exhausted: boolean | null
-          gemini_2_5_flash_exhausted_date: string | null
-          gemini_2_5_flash_tts_exhausted: boolean | null
-          gemini_2_5_flash_tts_exhausted_date: string | null
-          gemini_2_5_pro_exhausted: boolean | null
-          gemini_2_5_pro_exhausted_date: string | null
-          gemini_3_pro_exhausted: boolean | null
-          gemini_3_pro_exhausted_date: string | null
-          gemini_exp_1206_exhausted: boolean | null
-          gemini_exp_1206_exhausted_date: string | null
-          id: string
-          is_active: boolean
-          key_value: string
-          pro_3_0_quota_exhausted: boolean | null
-          pro_3_0_quota_exhausted_date: string | null
-          provider: string
-          tts_quota_exhausted: boolean | null
-          tts_quota_exhausted_date: string | null
-          updated_at: string
-        }
-        Insert: {
-          created_at?: string
-          error_count?: number
-          exp_pro_quota_exhausted?: boolean | null
-          exp_pro_quota_exhausted_date?: string | null
-          flash_2_5_quota_exhausted?: boolean | null
-          flash_2_5_quota_exhausted_date?: string | null
-          flash_lite_quota_exhausted?: boolean | null
-          flash_lite_quota_exhausted_date?: string | null
-          gemini_2_0_flash_exhausted?: boolean | null
-          gemini_2_0_flash_exhausted_date?: string | null
-          gemini_2_0_flash_lite_exhausted?: boolean | null
-          gemini_2_0_flash_lite_exhausted_date?: string | null
-          gemini_2_5_flash_exhausted?: boolean | null
-          gemini_2_5_flash_exhausted_date?: string | null
-          gemini_2_5_flash_tts_exhausted?: boolean | null
-          gemini_2_5_flash_tts_exhausted_date?: string | null
-          gemini_2_5_pro_exhausted?: boolean | null
-          gemini_2_5_pro_exhausted_date?: string | null
-          gemini_3_pro_exhausted?: boolean | null
-          gemini_3_pro_exhausted_date?: string | null
-          gemini_exp_1206_exhausted?: boolean | null
-          gemini_exp_1206_exhausted_date?: string | null
-          id?: string
-          is_active?: boolean
-          key_value: string
-          pro_3_0_quota_exhausted?: boolean | null
-          pro_3_0_quota_exhausted_date?: string | null
-          provider: string
-          tts_quota_exhausted?: boolean | null
-          tts_quota_exhausted_date?: string | null
-          updated_at?: string
-        }
-        Update: {
-          created_at?: string
-          error_count?: number
-          exp_pro_quota_exhausted?: boolean | null
-          exp_pro_quota_exhausted_date?: string | null
-          flash_2_5_quota_exhausted?: boolean | null
-          flash_2_5_quota_exhausted_date?: string | null
-          flash_lite_quota_exhausted?: boolean | null
-          flash_lite_quota_exhausted_date?: string | null
-          gemini_2_0_flash_exhausted?: boolean | null
-          gemini_2_0_flash_exhausted_date?: string | null
-          gemini_2_0_flash_lite_exhausted?: boolean | null
-          gemini_2_0_flash_lite_exhausted_date?: string | null
-          gemini_2_5_flash_exhausted?: boolean | null
-          gemini_2_5_flash_exhausted_date?: string | null
-          gemini_2_5_flash_tts_exhausted?: boolean | null
-          gemini_2_5_flash_tts_exhausted_date?: string | null
-          gemini_2_5_pro_exhausted?: boolean | null
-          gemini_2_5_pro_exhausted_date?: string | null
-          gemini_3_pro_exhausted?: boolean | null
-          gemini_3_pro_exhausted_date?: string | null
-          gemini_exp_1206_exhausted?: boolean | null
-          gemini_exp_1206_exhausted_date?: string | null
-          id?: string
-          is_active?: boolean
-          key_value?: string
-          pro_3_0_quota_exhausted?: boolean | null
-          pro_3_0_quota_exhausted_date?: string | null
-          provider?: string
-          tts_quota_exhausted?: boolean | null
-          tts_quota_exhausted_date?: string | null
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      bulk_generation_jobs: {
-        Row: {
-          admin_user_id: string
-          completed_at: string | null
-          created_at: string
-          difficulty: string
-          error_log: Json | null
-          failure_count: number
-          id: string
-          module: string
-          monologue: boolean | null
-          quantity: number
-          question_type: string | null
-          started_at: string | null
+          photo_url: string | null
+          rejection_reason: string | null
+          reviewed_at: string | null
+          reviewed_by_user_id: string | null
           status: string
-          success_count: number
-          topic: string
+          student_name: string
+          telegram_chat_id: string | null
           updated_at: string
         }
         Insert: {
-          admin_user_id: string
-          completed_at?: string | null
+          approved_password?: string | null
+          approved_shadow_id?: string | null
+          bkash_transaction_id?: string | null
+          class_name: string
           created_at?: string
-          difficulty: string
-          error_log?: Json | null
-          failure_count?: number
+          credentials_sent?: boolean | null
+          credentials_sent_at?: string | null
+          guardian_phone: string
           id?: string
-          module: string
-          monologue?: boolean | null
-          quantity: number
-          question_type?: string | null
-          started_at?: string | null
+          photo_url?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by_user_id?: string | null
           status?: string
-          success_count?: number
-          topic: string
+          student_name: string
+          telegram_chat_id?: string | null
           updated_at?: string
         }
         Update: {
-          admin_user_id?: string
-          completed_at?: string | null
+          approved_password?: string | null
+          approved_shadow_id?: string | null
+          bkash_transaction_id?: string | null
+          class_name?: string
           created_at?: string
-          difficulty?: string
-          error_log?: Json | null
-          failure_count?: number
+          credentials_sent?: boolean | null
+          credentials_sent_at?: string | null
+          guardian_phone?: string
           id?: string
-          module?: string
-          monologue?: boolean | null
-          quantity?: number
-          question_type?: string | null
-          started_at?: string | null
+          photo_url?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by_user_id?: string | null
           status?: string
-          success_count?: number
-          topic?: string
+          student_name?: string
+          telegram_chat_id?: string | null
           updated_at?: string
-        }
-        Relationships: []
-      }
-      flashcard_cards: {
-        Row: {
-          correct_count: number
-          created_at: string
-          deck_id: string
-          example: string | null
-          id: string
-          meaning: string
-          next_review_at: string | null
-          review_count: number
-          status: string
-          translation: string | null
-          updated_at: string
-          user_id: string
-          word: string
-        }
-        Insert: {
-          correct_count?: number
-          created_at?: string
-          deck_id: string
-          example?: string | null
-          id?: string
-          meaning: string
-          next_review_at?: string | null
-          review_count?: number
-          status?: string
-          translation?: string | null
-          updated_at?: string
-          user_id: string
-          word: string
-        }
-        Update: {
-          correct_count?: number
-          created_at?: string
-          deck_id?: string
-          example?: string | null
-          id?: string
-          meaning?: string
-          next_review_at?: string | null
-          review_count?: number
-          status?: string
-          translation?: string | null
-          updated_at?: string
-          user_id?: string
-          word?: string
         }
         Relationships: [
           {
-            foreignKeyName: "flashcard_cards_deck_id_fkey"
-            columns: ["deck_id"]
+            foreignKeyName: "admission_requests_reviewed_by_user_id_fkey"
+            columns: ["reviewed_by_user_id"]
             isOneToOne: false
-            referencedRelation: "flashcard_decks"
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
       }
-      flashcard_decks: {
-        Row: {
-          created_at: string
-          description: string | null
-          id: string
-          name: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          description?: string | null
-          id?: string
-          name: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          description?: string | null
-          id?: string
-          name?: string
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      generated_test_audio: {
-        Row: {
-          accent: string | null
-          audio_duration_seconds: number | null
-          audio_url: string | null
-          content_payload: Json
-          created_at: string
-          difficulty: string
-          id: string
-          is_published: boolean
-          job_id: string | null
-          last_used_at: string | null
-          module: string
-          question_type: string | null
-          sample_audio_url: string | null
-          status: string
-          times_used: number
-          topic: string
-          transcript: string | null
-          updated_at: string
-          voice_id: string | null
-        }
-        Insert: {
-          accent?: string | null
-          audio_duration_seconds?: number | null
-          audio_url?: string | null
-          content_payload?: Json
-          created_at?: string
-          difficulty: string
-          id?: string
-          is_published?: boolean
-          job_id?: string | null
-          last_used_at?: string | null
-          module: string
-          question_type?: string | null
-          sample_audio_url?: string | null
-          status?: string
-          times_used?: number
-          topic: string
-          transcript?: string | null
-          updated_at?: string
-          voice_id?: string | null
-        }
-        Update: {
-          accent?: string | null
-          audio_duration_seconds?: number | null
-          audio_url?: string | null
-          content_payload?: Json
-          created_at?: string
-          difficulty?: string
-          id?: string
-          is_published?: boolean
-          job_id?: string | null
-          last_used_at?: string | null
-          module?: string
-          question_type?: string | null
-          sample_audio_url?: string | null
-          status?: string
-          times_used?: number
-          topic?: string
-          transcript?: string | null
-          updated_at?: string
-          voice_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "generated_test_audio_job_id_fkey"
-            columns: ["job_id"]
-            isOneToOne: false
-            referencedRelation: "bulk_generation_jobs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      listening_question_groups: {
+      attendance: {
         Row: {
           created_at: string | null
-          end_question: number
-          group_heading: string | null
-          group_heading_alignment: string | null
+          date: string
           id: string
-          instruction: string | null
-          options: Json | null
-          question_type: string
-          start_question: number
-          start_timestamp_seconds: number | null
-          test_id: string
-        }
-        Insert: {
-          created_at?: string | null
-          end_question: number
-          group_heading?: string | null
-          group_heading_alignment?: string | null
-          id?: string
-          instruction?: string | null
-          options?: Json | null
-          question_type: string
-          start_question: number
-          start_timestamp_seconds?: number | null
-          test_id: string
-        }
-        Update: {
-          created_at?: string | null
-          end_question?: number
-          group_heading?: string | null
-          group_heading_alignment?: string | null
-          id?: string
-          instruction?: string | null
-          options?: Json | null
-          question_type?: string
-          start_question?: number
-          start_timestamp_seconds?: number | null
-          test_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "listening_question_groups_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "listening_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      listening_questions: {
-        Row: {
-          correct_answer: string
-          created_at: string | null
-          group_id: string
-          heading: string | null
-          id: string
-          is_given: boolean
-          option_format: string | null
-          options: Json | null
-          question_number: number
-          question_text: string
-          table_data: Json | null
-        }
-        Insert: {
-          correct_answer: string
-          created_at?: string | null
-          group_id: string
-          heading?: string | null
-          id?: string
-          is_given?: boolean
-          option_format?: string | null
-          options?: Json | null
-          question_number: number
-          question_text: string
-          table_data?: Json | null
-        }
-        Update: {
-          correct_answer?: string
-          created_at?: string | null
-          group_id?: string
-          heading?: string | null
-          id?: string
-          is_given?: boolean
-          option_format?: string | null
-          options?: Json | null
-          question_number?: number
-          question_text?: string
-          table_data?: Json | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "listening_questions_group_id_fkey"
-            columns: ["group_id"]
-            isOneToOne: false
-            referencedRelation: "listening_question_groups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      listening_test_submissions: {
-        Row: {
-          answers: Json
-          band_score: number | null
-          completed_at: string
-          created_at: string
-          id: string
-          score: number
-          test_id: string
-          total_questions: number
-          user_id: string
-        }
-        Insert: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          score?: number
-          test_id: string
-          total_questions?: number
-          user_id: string
-        }
-        Update: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          score?: number
-          test_id?: string
-          total_questions?: number
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "listening_test_submissions_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "listening_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      listening_tests: {
-        Row: {
-          audio_url: string | null
-          audio_url_part1: string | null
-          audio_url_part2: string | null
-          audio_url_part3: string | null
-          audio_url_part4: string | null
-          book_name: string
-          created_at: string | null
-          id: string
-          is_published: boolean
-          test_number: number
-          test_type: string
-          time_limit: number
-          title: string
-          total_questions: number
-          transcript_part1: string | null
-          transcript_part2: string | null
-          transcript_part3: string | null
-          transcript_part4: string | null
+          recorded_by_user_id: string
+          status: Database["public"]["Enums"]["attendance_status"]
+          student_user_id: string
           updated_at: string | null
         }
         Insert: {
-          audio_url?: string | null
-          audio_url_part1?: string | null
-          audio_url_part2?: string | null
-          audio_url_part3?: string | null
-          audio_url_part4?: string | null
-          book_name: string
           created_at?: string | null
+          date: string
           id?: string
-          is_published?: boolean
-          test_number: number
-          test_type?: string
-          time_limit?: number
-          title: string
-          total_questions?: number
-          transcript_part1?: string | null
-          transcript_part2?: string | null
-          transcript_part3?: string | null
-          transcript_part4?: string | null
+          recorded_by_user_id: string
+          status: Database["public"]["Enums"]["attendance_status"]
+          student_user_id: string
           updated_at?: string | null
         }
         Update: {
-          audio_url?: string | null
-          audio_url_part1?: string | null
-          audio_url_part2?: string | null
-          audio_url_part3?: string | null
-          audio_url_part4?: string | null
-          book_name?: string
           created_at?: string | null
+          date?: string
           id?: string
-          is_published?: boolean
-          test_number?: number
-          test_type?: string
-          time_limit?: number
-          title?: string
-          total_questions?: number
-          transcript_part1?: string | null
-          transcript_part2?: string | null
-          transcript_part3?: string | null
-          transcript_part4?: string | null
+          recorded_by_user_id?: string
+          status?: Database["public"]["Enums"]["attendance_status"]
+          student_user_id?: string
           updated_at?: string | null
-        }
-        Relationships: []
-      }
-      model_performance_logs: {
-        Row: {
-          api_key_id: string | null
-          created_at: string
-          error_message: string | null
-          id: string
-          model_name: string
-          response_time_ms: number | null
-          status: string
-          task_type: string
-        }
-        Insert: {
-          api_key_id?: string | null
-          created_at?: string
-          error_message?: string | null
-          id?: string
-          model_name: string
-          response_time_ms?: number | null
-          status: string
-          task_type: string
-        }
-        Update: {
-          api_key_id?: string | null
-          created_at?: string
-          error_message?: string | null
-          id?: string
-          model_name?: string
-          response_time_ms?: number | null
-          status?: string
-          task_type?: string
         }
         Relationships: [
           {
-            foreignKeyName: "model_performance_logs_api_key_id_fkey"
-            columns: ["api_key_id"]
+            foreignKeyName: "fk_attendance_student_user_id"
+            columns: ["student_user_id"]
             isOneToOne: false
-            referencedRelation: "api_keys"
+            referencedRelation: "students"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      chat_messages: {
+        Row: {
+          created_at: string
+          id: string
+          message_text: string
+          replied_to_message_id: string | null
+          sender_id: string
+          sender_name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          message_text: string
+          replied_to_message_id?: string | null
+          sender_id: string
+          sender_name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          message_text?: string
+          replied_to_message_id?: string | null
+          sender_id?: string
+          sender_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_messages_replied_to_message_id_fkey"
+            columns: ["replied_to_message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
             referencedColumns: ["id"]
           },
         ]
       }
-      profiles: {
+      chat_reactions: {
         Row: {
-          avatar_url: string | null
           created_at: string
-          daily_credits_used: number
-          email: string | null
-          full_name: string | null
+          emoji: string
           id: string
-          last_reset_date: string
-          updated_at: string
+          message_id: string
+          user_id: string
         }
         Insert: {
-          avatar_url?: string | null
           created_at?: string
-          daily_credits_used?: number
-          email?: string | null
-          full_name?: string | null
-          id: string
-          last_reset_date?: string
-          updated_at?: string
+          emoji: string
+          id?: string
+          message_id: string
+          user_id: string
         }
         Update: {
-          avatar_url?: string | null
           created_at?: string
-          daily_credits_used?: number
-          email?: string | null
-          full_name?: string | null
+          emoji?: string
           id?: string
-          last_reset_date?: string
-          updated_at?: string
+          message_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_reactions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      class_outlines: {
+        Row: {
+          class_name: string
+          created_at: string | null
+          created_by_user_id: string | null
+          id: string
+          lesson_plan: Json
+          outline_date: string
+          updated_at: string | null
+        }
+        Insert: {
+          class_name: string
+          created_at?: string | null
+          created_by_user_id?: string | null
+          id?: string
+          lesson_plan?: Json
+          outline_date: string
+          updated_at?: string | null
+        }
+        Update: {
+          class_name?: string
+          created_at?: string | null
+          created_by_user_id?: string | null
+          id?: string
+          lesson_plan?: Json
+          outline_date?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
-      promotions: {
+      coaching_balance: {
         Row: {
-          created_at: string
-          description: string | null
-          end_date: string
+          current_balance: number
           id: string
-          is_active: boolean
-          name: string
-          start_date: string
+          updated_at: string | null
         }
         Insert: {
-          created_at?: string
-          description?: string | null
-          end_date: string
+          current_balance?: number
           id?: string
-          is_active?: boolean
-          name: string
-          start_date: string
+          updated_at?: string | null
         }
         Update: {
-          created_at?: string
-          description?: string | null
-          end_date?: string
+          current_balance?: number
           id?: string
-          is_active?: boolean
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      custom_subjects: {
+        Row: {
+          created_at: string | null
+          created_by_user_id: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string | null
+          created_by_user_id?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string | null
+          created_by_user_id?: string | null
+          id?: string
           name?: string
-          start_date?: string
         }
         Relationships: []
       }
-      reading_paragraphs: {
+      dues: {
+        Row: {
+          class_name: string
+          created_at: string | null
+          due_amount: number
+          id: string
+          months_due: string | null
+          shadow_id: string
+          student_name: string
+          student_user_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          class_name: string
+          created_at?: string | null
+          due_amount: number
+          id?: string
+          months_due?: string | null
+          shadow_id: string
+          student_name: string
+          student_user_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          class_name?: string
+          created_at?: string | null
+          due_amount?: number
+          id?: string
+          months_due?: string | null
+          shadow_id?: string
+          student_name?: string
+          student_user_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      exam_schedules: {
+        Row: {
+          class_name: string
+          created_at: string | null
+          created_by_user_id: string | null
+          exam_date: string
+          exam_type: string
+          id: string
+          syllabus: Json
+          updated_at: string | null
+        }
+        Insert: {
+          class_name: string
+          created_at?: string | null
+          created_by_user_id?: string | null
+          exam_date: string
+          exam_type: string
+          id?: string
+          syllabus?: Json
+          updated_at?: string | null
+        }
+        Update: {
+          class_name?: string
+          created_at?: string | null
+          created_by_user_id?: string | null
+          exam_date?: string
+          exam_type?: string
+          id?: string
+          syllabus?: Json
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      expenses: {
+        Row: {
+          amount: number
+          created_at: string | null
+          description: string
+          expense_date: string
+          id: string
+          recorded_by_user_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          amount: number
+          created_at?: string | null
+          description: string
+          expense_date: string
+          id?: string
+          recorded_by_user_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          amount?: number
+          created_at?: string | null
+          description?: string
+          expense_date?: string
+          id?: string
+          recorded_by_user_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      finance_transactions: {
+        Row: {
+          amount: number
+          cleared_at: string | null
+          cleared_by_user_id: string | null
+          created_at: string | null
+          description: string | null
+          id: string
+          is_partial_payment: boolean | null
+          month: number
+          recorded_by_user_id: string | null
+          related_student_id: string | null
+          related_teacher_id: string | null
+          transaction_date: string
+          type: Database["public"]["Enums"]["finance_transaction_type"]
+          updated_at: string | null
+          user_id: string | null
+          year: number
+        }
+        Insert: {
+          amount: number
+          cleared_at?: string | null
+          cleared_by_user_id?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_partial_payment?: boolean | null
+          month: number
+          recorded_by_user_id?: string | null
+          related_student_id?: string | null
+          related_teacher_id?: string | null
+          transaction_date: string
+          type: Database["public"]["Enums"]["finance_transaction_type"]
+          updated_at?: string | null
+          user_id?: string | null
+          year: number
+        }
+        Update: {
+          amount?: number
+          cleared_at?: string | null
+          cleared_by_user_id?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_partial_payment?: boolean | null
+          month?: number
+          recorded_by_user_id?: string | null
+          related_student_id?: string | null
+          related_teacher_id?: string | null
+          transaction_date?: string
+          type?: Database["public"]["Enums"]["finance_transaction_type"]
+          updated_at?: string | null
+          user_id?: string | null
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "finance_transactions_related_student_id_fkey"
+            columns: ["related_student_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "finance_transactions_related_teacher_id_fkey"
+            columns: ["related_teacher_id"]
+            isOneToOne: false
+            referencedRelation: "teachers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notices: {
         Row: {
           content: string
-          created_at: string
+          created_at: string | null
           id: string
-          is_heading: boolean
-          label: string
-          order_index: number
-          passage_id: string
+          is_announcement: boolean | null
+          is_public: boolean | null
+          posted_by_user_id: string | null
+          title: string
+          updated_at: string | null
         }
         Insert: {
           content: string
-          created_at?: string
+          created_at?: string | null
           id?: string
-          is_heading?: boolean
-          label: string
-          order_index: number
-          passage_id: string
+          is_announcement?: boolean | null
+          is_public?: boolean | null
+          posted_by_user_id?: string | null
+          title: string
+          updated_at?: string | null
         }
         Update: {
           content?: string
-          created_at?: string
+          created_at?: string | null
           id?: string
-          is_heading?: boolean
-          label?: string
-          order_index?: number
-          passage_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reading_paragraphs_passage_id_fkey"
-            columns: ["passage_id"]
-            isOneToOne: false
-            referencedRelation: "reading_passages"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      reading_passages: {
-        Row: {
-          content: string
-          created_at: string
-          id: string
-          passage_number: number
-          show_labels: boolean
-          test_id: string
-          title: string
-        }
-        Insert: {
-          content: string
-          created_at?: string
-          id?: string
-          passage_number: number
-          show_labels?: boolean
-          test_id: string
-          title: string
-        }
-        Update: {
-          content?: string
-          created_at?: string
-          id?: string
-          passage_number?: number
-          show_labels?: boolean
-          test_id?: string
+          is_announcement?: boolean | null
+          is_public?: boolean | null
+          posted_by_user_id?: string | null
           title?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reading_passages_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "reading_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      reading_question_groups: {
-        Row: {
-          created_at: string
-          display_as_paragraph: boolean | null
-          end_question: number
-          id: string
-          instruction: string | null
-          options: Json | null
-          passage_id: string
-          question_type: string
-          show_bullets: boolean | null
-          show_headings: boolean | null
-          start_question: number
-          use_dropdown: boolean | null
-        }
-        Insert: {
-          created_at?: string
-          display_as_paragraph?: boolean | null
-          end_question: number
-          id?: string
-          instruction?: string | null
-          options?: Json | null
-          passage_id: string
-          question_type: string
-          show_bullets?: boolean | null
-          show_headings?: boolean | null
-          start_question: number
-          use_dropdown?: boolean | null
-        }
-        Update: {
-          created_at?: string
-          display_as_paragraph?: boolean | null
-          end_question?: number
-          id?: string
-          instruction?: string | null
-          options?: Json | null
-          passage_id?: string
-          question_type?: string
-          show_bullets?: boolean | null
-          show_headings?: boolean | null
-          start_question?: number
-          use_dropdown?: boolean | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reading_question_groups_passage_id_fkey"
-            columns: ["passage_id"]
-            isOneToOne: false
-            referencedRelation: "reading_passages"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      reading_questions: {
-        Row: {
-          correct_answer: string
-          created_at: string
-          heading: string | null
-          id: string
-          instruction: string | null
-          option_format: string | null
-          options: Json | null
-          passage_id: string
-          question_group_id: string | null
-          question_number: number
-          question_text: string
-          question_type: string
-          table_data: Json | null
-        }
-        Insert: {
-          correct_answer: string
-          created_at?: string
-          heading?: string | null
-          id?: string
-          instruction?: string | null
-          option_format?: string | null
-          options?: Json | null
-          passage_id: string
-          question_group_id?: string | null
-          question_number: number
-          question_text: string
-          question_type: string
-          table_data?: Json | null
-        }
-        Update: {
-          correct_answer?: string
-          created_at?: string
-          heading?: string | null
-          id?: string
-          instruction?: string | null
-          option_format?: string | null
-          options?: Json | null
-          passage_id?: string
-          question_group_id?: string | null
-          question_number?: number
-          question_text?: string
-          question_type?: string
-          table_data?: Json | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reading_questions_passage_id_fkey"
-            columns: ["passage_id"]
-            isOneToOne: false
-            referencedRelation: "reading_passages"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      reading_test_submissions: {
-        Row: {
-          answers: Json
-          band_score: number | null
-          completed_at: string
-          created_at: string
-          id: string
-          score: number
-          test_id: string
-          total_questions: number
-          user_id: string
-        }
-        Insert: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          score?: number
-          test_id: string
-          total_questions?: number
-          user_id: string
-        }
-        Update: {
-          answers?: Json
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          id?: string
-          score?: number
-          test_id?: string
-          total_questions?: number
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reading_test_submissions_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "reading_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      reading_tests: {
-        Row: {
-          book_name: string
-          created_at: string
-          id: string
-          is_published: boolean
-          test_number: number
-          test_type: string
-          time_limit: number
-          title: string
-          total_questions: number
-          updated_at: string
-        }
-        Insert: {
-          book_name: string
-          created_at?: string
-          id?: string
-          is_published?: boolean
-          test_number: number
-          test_type?: string
-          time_limit?: number
-          title: string
-          total_questions?: number
-          updated_at?: string
-        }
-        Update: {
-          book_name?: string
-          created_at?: string
-          id?: string
-          is_published?: boolean
-          test_number?: number
-          test_type?: string
-          time_limit?: number
-          title?: string
-          total_questions?: number
-          updated_at?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
-      speaking_evaluation_jobs: {
-        Row: {
-          completed_at: string | null
-          created_at: string
-          current_part: number | null
-          difficulty: string | null
-          durations: Json | null
-          file_paths: Json
-          fluency_flag: boolean | null
-          google_file_uris: Json | null
-          heartbeat_at: string | null
-          id: string
-          last_error: string | null
-          lock_expires_at: string | null
-          lock_token: string | null
-          max_retries: number | null
-          partial_results: Json | null
-          preset_id: string | null
-          processing_started_at: string | null
-          progress: number | null
-          result_id: string | null
-          retry_count: number | null
-          stage: string | null
-          status: string
-          test_id: string
-          topic: string | null
-          total_parts: number | null
-          updated_at: string
-          upload_completed_at: string | null
-          user_id: string
-        }
-        Insert: {
-          completed_at?: string | null
-          created_at?: string
-          current_part?: number | null
-          difficulty?: string | null
-          durations?: Json | null
-          file_paths?: Json
-          fluency_flag?: boolean | null
-          google_file_uris?: Json | null
-          heartbeat_at?: string | null
-          id?: string
-          last_error?: string | null
-          lock_expires_at?: string | null
-          lock_token?: string | null
-          max_retries?: number | null
-          partial_results?: Json | null
-          preset_id?: string | null
-          processing_started_at?: string | null
-          progress?: number | null
-          result_id?: string | null
-          retry_count?: number | null
-          stage?: string | null
-          status?: string
-          test_id: string
-          topic?: string | null
-          total_parts?: number | null
-          updated_at?: string
-          upload_completed_at?: string | null
-          user_id: string
-        }
-        Update: {
-          completed_at?: string | null
-          created_at?: string
-          current_part?: number | null
-          difficulty?: string | null
-          durations?: Json | null
-          file_paths?: Json
-          fluency_flag?: boolean | null
-          google_file_uris?: Json | null
-          heartbeat_at?: string | null
-          id?: string
-          last_error?: string | null
-          lock_expires_at?: string | null
-          lock_token?: string | null
-          max_retries?: number | null
-          partial_results?: Json | null
-          preset_id?: string | null
-          processing_started_at?: string | null
-          progress?: number | null
-          result_id?: string | null
-          retry_count?: number | null
-          stage?: string | null
-          status?: string
-          test_id?: string
-          topic?: string | null
-          total_parts?: number | null
-          updated_at?: string
-          upload_completed_at?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      speaking_question_groups: {
+      results: {
         Row: {
           created_at: string | null
-          cue_card_content: string | null
-          cue_card_topic: string | null
+          exam_date: string
+          grade: string | null
           id: string
-          instruction: string | null
-          min_required_questions: number | null
-          options: Json | null
-          part_number: number
-          preparation_time_seconds: number | null
-          speaking_time_seconds: number | null
-          test_id: string
-          time_limit_seconds: number | null
-          total_part_time_limit_seconds: number | null
-          updated_at: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          cue_card_content?: string | null
-          cue_card_topic?: string | null
-          id?: string
-          instruction?: string | null
-          min_required_questions?: number | null
-          options?: Json | null
-          part_number: number
-          preparation_time_seconds?: number | null
-          speaking_time_seconds?: number | null
-          test_id: string
-          time_limit_seconds?: number | null
-          total_part_time_limit_seconds?: number | null
-          updated_at?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          cue_card_content?: string | null
-          cue_card_topic?: string | null
-          id?: string
-          instruction?: string | null
-          min_required_questions?: number | null
-          options?: Json | null
-          part_number?: number
-          preparation_time_seconds?: number | null
-          speaking_time_seconds?: number | null
-          test_id?: string
-          time_limit_seconds?: number | null
-          total_part_time_limit_seconds?: number | null
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "speaking_question_groups_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "speaking_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      speaking_questions: {
-        Row: {
-          audio_url: string | null
-          created_at: string | null
-          group_id: string
-          id: string
-          is_required: boolean
-          order_index: number
-          question_number: number
-          question_text: string
-          updated_at: string | null
-        }
-        Insert: {
-          audio_url?: string | null
-          created_at?: string | null
-          group_id: string
-          id?: string
-          is_required?: boolean
-          order_index: number
-          question_number: number
-          question_text: string
-          updated_at?: string | null
-        }
-        Update: {
-          audio_url?: string | null
-          created_at?: string | null
-          group_id?: string
-          id?: string
-          is_required?: boolean
-          order_index?: number
-          question_number?: number
-          question_text?: string
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "speaking_questions_group_id_fkey"
-            columns: ["group_id"]
-            isOneToOne: false
-            referencedRelation: "speaking_question_groups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      speaking_shared_audio: {
-        Row: {
-          audio_key: string
-          audio_url: string | null
-          created_at: string
-          description: string | null
-          display_order: number
-          fallback_text: string
-          id: string
-          updated_at: string
-        }
-        Insert: {
-          audio_key: string
-          audio_url?: string | null
-          created_at?: string
-          description?: string | null
-          display_order?: number
-          fallback_text: string
-          id?: string
-          updated_at?: string
-        }
-        Update: {
-          audio_key?: string
-          audio_url?: string | null
-          created_at?: string
-          description?: string | null
-          display_order?: number
-          fallback_text?: string
-          id?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      speaking_submissions: {
-        Row: {
-          audio_url_part1: string | null
-          audio_url_part2: string | null
-          audio_url_part3: string | null
-          created_at: string | null
-          evaluation_report: Json | null
-          id: string
-          overall_band: number | null
-          submitted_at: string | null
-          test_id: string
-          transcript_part1: string | null
-          transcript_part2: string | null
-          transcript_part3: string | null
-          updated_at: string | null
-          user_id: string
-        }
-        Insert: {
-          audio_url_part1?: string | null
-          audio_url_part2?: string | null
-          audio_url_part3?: string | null
-          created_at?: string | null
-          evaluation_report?: Json | null
-          id?: string
-          overall_band?: number | null
-          submitted_at?: string | null
-          test_id: string
-          transcript_part1?: string | null
-          transcript_part2?: string | null
-          transcript_part3?: string | null
-          updated_at?: string | null
-          user_id: string
-        }
-        Update: {
-          audio_url_part1?: string | null
-          audio_url_part2?: string | null
-          audio_url_part3?: string | null
-          created_at?: string | null
-          evaluation_report?: Json | null
-          id?: string
-          overall_band?: number | null
-          submitted_at?: string | null
-          test_id?: string
-          transcript_part1?: string | null
-          transcript_part2?: string | null
-          transcript_part3?: string | null
-          updated_at?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "speaking_submissions_test_id_fkey"
-            columns: ["test_id"]
-            isOneToOne: false
-            referencedRelation: "speaking_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      speaking_tests: {
-        Row: {
-          created_at: string | null
-          description: string | null
-          id: string
-          is_published: boolean
-          name: string
-          test_type: string
-          updated_at: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          is_published?: boolean
-          name: string
-          test_type?: string
-          updated_at?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          is_published?: boolean
-          name?: string
-          test_type?: string
-          updated_at?: string | null
-        }
-        Relationships: []
-      }
-      subscriptions: {
-        Row: {
-          created_at: string
-          end_date: string
-          id: string
-          plan_name: string
-          price: number
-          start_date: string
-          status: Database["public"]["Enums"]["subscription_status"]
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          end_date: string
-          id?: string
-          plan_name: string
-          price: number
-          start_date?: string
-          status?: Database["public"]["Enums"]["subscription_status"]
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          end_date?: string
-          id?: string
-          plan_name?: string
-          price?: number
-          start_date?: string
-          status?: Database["public"]["Enums"]["subscription_status"]
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "subscriptions_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      test_presets: {
-        Row: {
-          created_at: string
-          id: string
-          is_published: boolean
-          module: string
-          payload: Json
-          topic: string
-          updated_at: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          is_published?: boolean
-          module: string
-          payload?: Json
-          topic: string
-          updated_at?: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          is_published?: boolean
-          module?: string
-          payload?: Json
-          topic?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      test_results: {
-        Row: {
-          answers: Json | null
-          band_score: number | null
-          completed_at: string
-          created_at: string
-          feedback: Json | null
-          id: string
+          imported_by_user_id: string | null
           score: number | null
-          test_type: string
-          user_id: string
-        }
-        Insert: {
-          answers?: Json | null
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          feedback?: Json | null
-          id?: string
-          score?: number | null
-          test_type: string
-          user_id: string
-        }
-        Update: {
-          answers?: Json | null
-          band_score?: number | null
-          completed_at?: string
-          created_at?: string
-          feedback?: Json | null
-          id?: string
-          score?: number | null
-          test_type?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "test_results_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      user_analytics: {
-        Row: {
-          analysis_data: Json
-          created_at: string
-          generated_at: string
-          id: string
-          module_type: string
-          tests_analyzed: number
-          user_id: string
-        }
-        Insert: {
-          analysis_data?: Json
-          created_at?: string
-          generated_at?: string
-          id?: string
-          module_type: string
-          tests_analyzed?: number
-          user_id: string
-        }
-        Update: {
-          analysis_data?: Json
-          created_at?: string
-          generated_at?: string
-          id?: string
-          module_type?: string
-          tests_analyzed?: number
-          user_id?: string
-        }
-        Relationships: []
-      }
-      user_api_keys: {
-        Row: {
-          created_at: string
-          flash_2_5_quota_exhausted: boolean | null
-          flash_2_5_quota_exhausted_date: string | null
-          id: string
-          is_active: boolean
-          key_value: string
-          provider: string
-          tts_quota_exhausted: boolean | null
-          tts_quota_exhausted_date: string | null
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          flash_2_5_quota_exhausted?: boolean | null
-          flash_2_5_quota_exhausted_date?: string | null
-          id?: string
-          is_active?: boolean
-          key_value: string
-          provider?: string
-          tts_quota_exhausted?: boolean | null
-          tts_quota_exhausted_date?: string | null
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          flash_2_5_quota_exhausted?: boolean | null
-          flash_2_5_quota_exhausted_date?: string | null
-          id?: string
-          is_active?: boolean
-          key_value?: string
-          provider?: string
-          tts_quota_exhausted?: boolean | null
-          tts_quota_exhausted_date?: string | null
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: []
-      }
-      user_secrets: {
-        Row: {
-          created_at: string | null
-          encrypted_value: string
-          id: string
-          secret_name: string
+          student_user_id: string
+          subject: string
+          total_marks: number | null
           updated_at: string | null
-          user_id: string
         }
         Insert: {
           created_at?: string | null
-          encrypted_value: string
+          exam_date: string
+          grade?: string | null
           id?: string
-          secret_name: string
+          imported_by_user_id?: string | null
+          score?: number | null
+          student_user_id: string
+          subject: string
+          total_marks?: number | null
           updated_at?: string | null
-          user_id: string
         }
         Update: {
           created_at?: string | null
-          encrypted_value?: string
+          exam_date?: string
+          grade?: string | null
           id?: string
-          secret_name?: string
+          imported_by_user_id?: string | null
+          score?: number | null
+          student_user_id?: string
+          subject?: string
+          total_marks?: number | null
           updated_at?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      user_test_history: {
-        Row: {
-          id: string
-          taken_at: string
-          test_id: string
-          user_id: string
-        }
-        Insert: {
-          id?: string
-          taken_at?: string
-          test_id: string
-          user_id: string
-        }
-        Update: {
-          id?: string
-          taken_at?: string
-          test_id?: string
-          user_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "user_test_history_test_id_fkey"
-            columns: ["test_id"]
+            foreignKeyName: "fk_results_imported_by_user"
+            columns: ["imported_by_user_id"]
             isOneToOne: false
-            referencedRelation: "generated_test_audio"
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_results_student_user"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "results_imported_by_user_id_fkey"
+            columns: ["imported_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "results_student_user_id_fkey"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
       }
-      writing_submissions: {
+      schedules: {
         Row: {
-          evaluation_report: Json | null
-          id: string
-          overall_band: number | null
-          submission_text: string
-          submitted_at: string | null
-          task_id: string
-          user_id: string
-          word_count: number
-        }
-        Insert: {
-          evaluation_report?: Json | null
-          id?: string
-          overall_band?: number | null
-          submission_text: string
-          submitted_at?: string | null
-          task_id: string
-          user_id: string
-          word_count: number
-        }
-        Update: {
-          evaluation_report?: Json | null
-          id?: string
-          overall_band?: number | null
-          submission_text?: string
-          submitted_at?: string | null
-          task_id?: string
-          user_id?: string
-          word_count?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "writing_submissions_task_id_fkey"
-            columns: ["task_id"]
-            isOneToOne: false
-            referencedRelation: "writing_tasks"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      writing_tasks: {
-        Row: {
+          class_name: string | null
           created_at: string | null
-          id: string
-          image_height: number | null
-          image_url: string | null
-          image_width: number | null
-          instruction: string
-          task_type: Database["public"]["Enums"]["writing_task_type"]
-          text_content: string | null
-          updated_at: string | null
-          word_limit_max: number | null
-          word_limit_min: number
-          writing_test_id: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          id?: string
-          image_height?: number | null
-          image_url?: string | null
-          image_width?: number | null
-          instruction: string
-          task_type: Database["public"]["Enums"]["writing_task_type"]
-          text_content?: string | null
-          updated_at?: string | null
-          word_limit_max?: number | null
-          word_limit_min?: number
-          writing_test_id?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          id?: string
-          image_height?: number | null
-          image_url?: string | null
-          image_width?: number | null
-          instruction?: string
-          task_type?: Database["public"]["Enums"]["writing_task_type"]
-          text_content?: string | null
-          updated_at?: string | null
-          word_limit_max?: number | null
-          word_limit_min?: number
-          writing_test_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "writing_tasks_writing_test_id_fkey"
-            columns: ["writing_test_id"]
-            isOneToOne: false
-            referencedRelation: "writing_tests"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      writing_tests: {
-        Row: {
-          created_at: string
           description: string | null
+          end_time: string
+          id: string
+          location: string | null
+          start_time: string
+          teacher_user_id: string | null
+          title: string
+          updated_at: string | null
+        }
+        Insert: {
+          class_name?: string | null
+          created_at?: string | null
+          description?: string | null
+          end_time: string
+          id?: string
+          location?: string | null
+          start_time: string
+          teacher_user_id?: string | null
+          title: string
+          updated_at?: string | null
+        }
+        Update: {
+          class_name?: string | null
+          created_at?: string | null
+          description?: string | null
+          end_time?: string
+          id?: string
+          location?: string | null
+          start_time?: string
+          teacher_user_id?: string | null
+          title?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      scholarship_lists: {
+        Row: {
+          created_at: string
+          created_by_user_id: string
           id: string
           is_published: boolean
-          time_limit: number
-          title: string
+          published_at: string | null
           updated_at: string
+          year: number
         }
         Insert: {
           created_at?: string
-          description?: string | null
+          created_by_user_id: string
           id?: string
           is_published?: boolean
-          time_limit?: number
-          title: string
+          published_at?: string | null
           updated_at?: string
+          year: number
         }
         Update: {
           created_at?: string
-          description?: string | null
+          created_by_user_id?: string
           id?: string
           is_published?: boolean
-          time_limit?: number
-          title?: string
+          published_at?: string | null
           updated_at?: string
+          year?: number
+        }
+        Relationships: []
+      }
+      scholarship_students: {
+        Row: {
+          class_name: string
+          contact_number: string
+          created_at: string
+          created_by_user_id: string
+          id: string
+          scholarship_list_id: string
+          school_name: string
+          student_name: string
+          updated_at: string
+        }
+        Insert: {
+          class_name: string
+          contact_number: string
+          created_at?: string
+          created_by_user_id: string
+          id?: string
+          scholarship_list_id: string
+          school_name: string
+          student_name: string
+          updated_at?: string
+        }
+        Update: {
+          class_name?: string
+          contact_number?: string
+          created_at?: string
+          created_by_user_id?: string
+          id?: string
+          scholarship_list_id?: string
+          school_name?: string
+          student_name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scholarship_students_scholarship_list_id_fkey"
+            columns: ["scholarship_list_id"]
+            isOneToOne: false
+            referencedRelation: "scholarship_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      student_dues: {
+        Row: {
+          amount_paid: number
+          cleared_at: string | null
+          cleared_by_user_id: string | null
+          created_at: string | null
+          discount_amount: number
+          id: string
+          is_cleared: boolean
+          month: number
+          monthly_fee: number
+          student_user_id: string
+          updated_at: string | null
+          year: number
+        }
+        Insert: {
+          amount_paid?: number
+          cleared_at?: string | null
+          cleared_by_user_id?: string | null
+          created_at?: string | null
+          discount_amount?: number
+          id?: string
+          is_cleared?: boolean
+          month: number
+          monthly_fee?: number
+          student_user_id: string
+          updated_at?: string | null
+          year: number
+        }
+        Update: {
+          amount_paid?: number
+          cleared_at?: string | null
+          cleared_by_user_id?: string | null
+          created_at?: string | null
+          discount_amount?: number
+          id?: string
+          is_cleared?: boolean
+          month?: number
+          monthly_fee?: number
+          student_user_id?: string
+          updated_at?: string | null
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_student_dues_student_user_id"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      student_result_views: {
+        Row: {
+          id: string
+          result_id: string
+          student_user_id: string
+          viewed_at: string
+        }
+        Insert: {
+          id?: string
+          result_id: string
+          student_user_id: string
+          viewed_at?: string
+        }
+        Update: {
+          id?: string
+          result_id?: string
+          student_user_id?: string
+          viewed_at?: string
+        }
+        Relationships: []
+      }
+      student_yearly_discounts: {
+        Row: {
+          created_at: string | null
+          created_by_user_id: string
+          discount_amount_per_month: number
+          id: string
+          student_user_id: string
+          updated_at: string | null
+          year: number
+        }
+        Insert: {
+          created_at?: string | null
+          created_by_user_id: string
+          discount_amount_per_month: number
+          id?: string
+          student_user_id: string
+          updated_at?: string | null
+          year: number
+        }
+        Update: {
+          created_at?: string | null
+          created_by_user_id?: string
+          discount_amount_per_month?: number
+          id?: string
+          student_user_id?: string
+          updated_at?: string | null
+          year?: number
+        }
+        Relationships: []
+      }
+      students: {
+        Row: {
+          class: string
+          created_at: string | null
+          guardian_phone: string
+          id: string
+          is_active: boolean | null
+          name: string
+          photo_url: string | null
+          shadow_id: string
+          telegram_chat_id: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          class: string
+          created_at?: string | null
+          guardian_phone: string
+          id?: string
+          is_active?: boolean | null
+          name: string
+          photo_url?: string | null
+          shadow_id: string
+          telegram_chat_id?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          class?: string
+          created_at?: string | null
+          guardian_phone?: string
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          photo_url?: string | null
+          shadow_id?: string
+          telegram_chat_id?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      teacher_balances: {
+        Row: {
+          created_at: string | null
+          current_balance: number
+          id: string
+          teacher_user_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          current_balance?: number
+          id?: string
+          teacher_user_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          current_balance?: number
+          id?: string
+          teacher_user_id?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      teacher_salaries: {
+        Row: {
+          created_at: string | null
+          created_by_user_id: string
+          id: string
+          monthly_salary: number
+          teacher_user_id: string
+          updated_at: string | null
+          year: number
+        }
+        Insert: {
+          created_at?: string | null
+          created_by_user_id: string
+          id?: string
+          monthly_salary: number
+          teacher_user_id: string
+          updated_at?: string | null
+          year: number
+        }
+        Update: {
+          created_at?: string | null
+          created_by_user_id?: string
+          id?: string
+          monthly_salary?: number
+          teacher_user_id?: string
+          updated_at?: string | null
+          year?: number
+        }
+        Relationships: []
+      }
+      teachers: {
+        Row: {
+          created_at: string | null
+          experience: string | null
+          expertise: string | null
+          id: string
+          mobile_number: string | null
+          name: string
+          photo_url: string | null
+          shadow_id: string
+          teacher_type: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          experience?: string | null
+          expertise?: string | null
+          id?: string
+          mobile_number?: string | null
+          name: string
+          photo_url?: string | null
+          shadow_id: string
+          teacher_type?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          experience?: string | null
+          expertise?: string | null
+          id?: string
+          mobile_number?: string | null
+          name?: string
+          photo_url?: string | null
+          shadow_id?: string
+          teacher_type?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      users: {
+        Row: {
+          created_at: string | null
+          email: string | null
+          id: string
+          name: string
+          photo_url: string | null
+          role: Database["public"]["Enums"]["user_role"]
+          shadow_id: string
+          teacher_type: Database["public"]["Enums"]["user_teacher_type"] | null
+          telegram_chat_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          email?: string | null
+          id: string
+          name: string
+          photo_url?: string | null
+          role?: Database["public"]["Enums"]["user_role"]
+          shadow_id: string
+          teacher_type?: Database["public"]["Enums"]["user_teacher_type"] | null
+          telegram_chat_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          name?: string
+          photo_url?: string | null
+          role?: Database["public"]["Enums"]["user_role"]
+          shadow_id?: string
+          teacher_type?: Database["public"]["Enums"]["user_teacher_type"] | null
+          telegram_chat_id?: string | null
+          updated_at?: string | null
         }
         Relationships: []
       }
     }
     Views: {
-      [_ in never]: never
+      attendance_records_view: {
+        Row: {
+          date: string | null
+          id: string | null
+          recorded_by_user_id: string | null
+          status: Database["public"]["Enums"]["attendance_status"] | null
+          student_class: string | null
+          student_name: string | null
+          student_shadow_id: string | null
+          student_user_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_attendance_student_user_id"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      attendance_summary_view: {
+        Row: {
+          absent_count: number | null
+          class_name: string | null
+          date: string | null
+          late_count: number | null
+          present_count: number | null
+          recorded_by_user_id: string | null
+          total_students: number | null
+        }
+        Relationships: []
+      }
+      student_dues_with_student_info_view: {
+        Row: {
+          amount_paid: number | null
+          discount_amount: number | null
+          id: string | null
+          is_cleared: boolean | null
+          month: number | null
+          monthly_fee: number | null
+          student_class: string | null
+          student_name: string | null
+          student_shadow_id: string | null
+          student_user_id: string | null
+          year: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_student_dues_student_user_id"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      student_results_view: {
+        Row: {
+          created_at: string | null
+          exam_date: string | null
+          grade: string | null
+          id: string | null
+          imported_by_user_id: string | null
+          score: number | null
+          student_class: string | null
+          student_name: string | null
+          student_shadow_id: string | null
+          student_user_id: string | null
+          subject: string | null
+          total_marks: number | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_results_imported_by_user"
+            columns: ["imported_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_results_student_user"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "results_imported_by_user_id_fkey"
+            columns: ["imported_by_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "results_student_user_id_fkey"
+            columns: ["student_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
-      can_user_submit: { Args: { p_user_id: string }; Returns: boolean }
-      check_and_reserve_credits: {
-        Args: { p_cost: number; p_user_id: string }
-        Returns: Json
-      }
-      cleanup_old_data: { Args: never; Returns: Json }
-      get_credit_status: { Args: { p_user_id: string }; Returns: Json }
-      get_model_performance_stats: {
-        Args: { p_hours?: number }
-        Returns: {
-          avg_response_time_ms: number
-          error_count: number
-          model_name: string
-          quota_exceeded_count: number
-          success_count: number
-          success_rate: number
-          task_type: string
-          total_calls: number
-        }[]
-      }
-      has_active_subscription: { Args: { p_user_id: string }; Returns: boolean }
-      increment_topic_completion: {
-        Args: { p_module: string; p_topic: string; p_user_id: string }
-        Returns: undefined
-      }
-      is_admin: { Args: { check_user_id: string }; Returns: boolean }
-      is_promotion_active: { Args: never; Returns: boolean }
-      log_model_performance: {
-        Args: {
-          p_api_key_id: string
-          p_error_message?: string
-          p_model_name: string
-          p_response_time_ms?: number
-          p_status: string
-          p_task_type: string
-        }
-        Returns: undefined
-      }
-      refund_credits: {
-        Args: { p_cost: number; p_user_id: string }
-        Returns: undefined
-      }
-      reset_api_key_model_quotas: {
-        Args: { p_key_id?: string }
-        Returns: undefined
-      }
-      reset_api_key_quotas: { Args: never; Returns: undefined }
-      reset_user_api_key_quotas: { Args: never; Returns: undefined }
+      is_admin:
+        | { Args: never; Returns: boolean }
+        | { Args: { user_id: string }; Returns: boolean }
+      is_student: { Args: never; Returns: boolean }
+      is_teacher:
+        | { Args: never; Returns: boolean }
+        | { Args: { user_id: string }; Returns: boolean }
     }
     Enums: {
-      subscription_status: "active" | "cancelled" | "expired" | "pending"
-      writing_task_type: "task1" | "task2"
+      attendance_status: "present" | "absent" | "late"
+      finance_transaction_type:
+        | "student_payment"
+        | "teacher_salary_credit"
+        | "teacher_salary_debit"
+        | "expense"
+        | "shareholder_profit_credit"
+        | "shareholder_profit_debit"
+      user_role: "admin" | "teacher" | "student"
+      user_teacher_type: "general" | "shareholder"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1947,8 +1176,17 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      subscription_status: ["active", "cancelled", "expired", "pending"],
-      writing_task_type: ["task1", "task2"],
+      attendance_status: ["present", "absent", "late"],
+      finance_transaction_type: [
+        "student_payment",
+        "teacher_salary_credit",
+        "teacher_salary_debit",
+        "expense",
+        "shareholder_profit_credit",
+        "shareholder_profit_debit",
+      ],
+      user_role: ["admin", "teacher", "student"],
+      user_teacher_type: ["general", "shareholder"],
     },
   },
 } as const
