@@ -293,13 +293,23 @@ function ConfidenceAnalysisTab({ transcripts }: { transcripts?: Record<string, C
     );
   }
 
-  const getConfidenceColor = (confidence: number, isFiller?: boolean) => {
-    // Fillers always get red/destructive color regardless of confidence
-    if (isFiller) return 'bg-destructive/20 text-destructive border-destructive/30';
-    if (confidence >= 90) return 'bg-success/20 text-success border-success/30';
-    if (confidence >= 75) return 'bg-warning/20 text-warning border-warning/30';
-    if (confidence >= 60) return 'bg-orange-500/20 text-orange-600 border-orange-500/30';
-    return 'bg-destructive/20 text-destructive border-destructive/30';
+  // Color function matching the reference screenshot - inline text style
+  const getConfidenceTextColor = (confidence: number, isFiller?: boolean): string => {
+    if (isFiller) return 'text-red-600 dark:text-red-400';
+    if (confidence >= 95) return 'text-green-700 dark:text-green-400';
+    if (confidence >= 85) return 'text-green-600 dark:text-green-500';
+    if (confidence >= 70) return 'text-yellow-600 dark:text-yellow-400';
+    if (confidence >= 50) return 'text-orange-600 dark:text-orange-400';
+    return 'text-red-600 dark:text-red-400';
+  };
+
+  const getConfidencePercentColor = (confidence: number, isFiller?: boolean): string => {
+    if (isFiller) return 'text-red-500 dark:text-red-400';
+    if (confidence >= 95) return 'text-green-600 dark:text-green-400';
+    if (confidence >= 85) return 'text-green-500 dark:text-green-500';
+    if (confidence >= 70) return 'text-yellow-500 dark:text-yellow-400';
+    if (confidence >= 50) return 'text-orange-500 dark:text-orange-400';
+    return 'text-red-500 dark:text-red-400';
   };
 
   const sortedSegments = Object.entries(transcripts).sort(([a], [b]) => {
@@ -317,7 +327,7 @@ function ConfidenceAnalysisTab({ transcripts }: { transcripts?: Record<string, C
             Word Confidence Analysis
           </CardTitle>
           <CardDescription>
-            Per-word confidence scores and fluency metrics captured during your test
+            Actual audio transcript (What native speakers are likely to hear)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -353,49 +363,43 @@ function ConfidenceAnalysisTab({ transcripts }: { transcripts?: Record<string, C
                   </div>
                 </div>
 
-                {/* Word Confidence Display */}
+                {/* Word Confidence Display - Inline text style like reference */}
                 {data.wordConfidences && data.wordConfidences.length > 0 && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">Word Confidence:</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.wordConfidences.map((w, idx) => (
-                        <span
-                          key={idx}
-                          className={cn(
-                            "inline-flex flex-col items-center px-1.5 py-0.5 rounded border text-xs",
-                            getConfidenceColor(w.confidence, w.isFiller),
-                            w.isFiller && "italic",
-                            w.isRepeat && "line-through opacity-60"
-                          )}
-                          title={`${w.confidence}% confidence${w.isFiller ? ' (filler)' : ''}${w.isRepeat ? ' (repeat)' : ''}`}
-                        >
-                          <span className="font-medium">{w.word}</span>
-                          <span className="text-[10px] opacity-75">{w.confidence}%</span>
+                  <div className="leading-relaxed">
+                    {data.wordConfidences.map((w, idx) => (
+                      <span
+                        key={idx}
+                        className={cn(
+                          "inline-block text-center mx-0.5 mb-2",
+                          w.isFiller && "italic",
+                          w.isRepeat && "line-through opacity-60"
+                        )}
+                        title={`${w.confidence}% confidence${w.isFiller ? ' (filler)' : ''}${w.isRepeat ? ' (repeat)' : ''}`}
+                      >
+                        <span className={cn("block text-[10px] font-normal", getConfidencePercentColor(w.confidence, w.isFiller))}>
+                          {w.confidence}%
                         </span>
-                      ))}
-                    </div>
+                        <span className={cn("font-semibold text-sm", getConfidenceTextColor(w.confidence, w.isFiller))}>
+                          {w.word}
+                        </span>
+                      </span>
+                    ))}
                   </div>
                 )}
 
-                {/* Raw vs Cleaned Transcript */}
+                {/* What you said - Raw Transcript */}
                 {data.rawTranscript && (
-                  <div className="space-y-2">
+                  <div className="space-y-2 pt-2 border-t">
                     <div>
-                      <p className="text-xs text-muted-foreground mb-1">What you said:</p>
-                      <p className="text-sm bg-muted/50 p-2 rounded">{data.rawTranscript}</p>
+                      <p className="text-xs text-muted-foreground mb-1 underline">What you said:</p>
+                      <p className="text-sm">{data.rawTranscript}</p>
                     </div>
-                    {data.cleanedTranscript && data.cleanedTranscript !== data.rawTranscript && (
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-1">Cleaned (fillers removed):</p>
-                        <p className="text-sm bg-success/10 p-2 rounded border border-success/20">{data.cleanedTranscript}</p>
-                      </div>
-                    )}
                   </div>
                 )}
 
                 {/* Prosody Metrics */}
                 {data.prosodyMetrics && (
-                  <div className="flex gap-4 text-xs text-muted-foreground">
+                  <div className="flex gap-4 text-xs text-muted-foreground pt-2">
                     {data.prosodyMetrics.pitchVariation !== undefined && (
                       <span>Pitch Variation: {data.prosodyMetrics.pitchVariation.toFixed(0)}%</span>
                     )}
@@ -422,25 +426,29 @@ function ConfidenceAnalysisTab({ transcripts }: { transcripts?: Record<string, C
         </CardContent>
       </Card>
 
-      {/* Confidence Legend */}
+      {/* Confidence Legend - Updated to match inline style */}
       <Card>
         <CardContent className="py-3">
-          <div className="flex flex-wrap gap-3 justify-center text-xs">
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-success/20 border border-success/30"></span>
-              90-100% Clear
+          <div className="flex flex-wrap gap-4 justify-center text-xs">
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-green-700 dark:text-green-400">word</span>
+              <span className="text-muted-foreground">95-100%</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-warning/20 border border-warning/30"></span>
-              75-89% Good
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-green-600 dark:text-green-500">word</span>
+              <span className="text-muted-foreground">85-94%</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-orange-500/20 border border-orange-500/30"></span>
-              60-74% Okay
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-yellow-600 dark:text-yellow-400">word</span>
+              <span className="text-muted-foreground">70-84%</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-destructive/20 border border-destructive/30"></span>
-              &lt;60% Unclear
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-orange-600 dark:text-orange-400">word</span>
+              <span className="text-muted-foreground">50-69%</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-red-600 dark:text-red-400">word</span>
+              <span className="text-muted-foreground">&lt;50%</span>
             </span>
           </div>
         </CardContent>

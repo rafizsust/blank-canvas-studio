@@ -11,7 +11,7 @@ import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 // TestStartOverlay removed - mic test is now the only entry point
 // AILoadingScreen removed - using custom inline progress UI
 import { ExitTestConfirmDialog } from '@/components/common/ExitTestConfirmDialog';
-import { MicrophoneTest, AccentCode } from '@/components/speaking/MicrophoneTest';
+import { MicrophoneTest, AccentCode, EvaluationMode } from '@/components/speaking/MicrophoneTest';
 import { describeApiError } from '@/lib/apiErrors';
 import { supabase } from '@/integrations/supabase/client';
 import {
@@ -116,6 +116,9 @@ export default function AIPracticeSpeakingTest() {
   
   // Selected accent for speech recognition (set during mic test)
   const [selectedAccent, setSelectedAccent] = useState<AccentCode>('en-GB');
+  
+  // Evaluation mode: 'basic' (text-based) or 'accuracy' (audio-based)
+  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>('basic');
   
   // Shared audio for presets (instructions, transitions, endings - fetched from speaking_shared_audio table)
   const [sharedAudio, setSharedAudio] = useState<Record<string, { audio_url: string | null; fallback_text: string }>>({});
@@ -1230,8 +1233,9 @@ export default function AIPracticeSpeakingTest() {
           difficulty: test?.difficulty,
           fluencyFlag,
           cancelExisting: true, // Cancel any existing pending jobs to avoid 429
-          // Include text-based analysis data for cheaper evaluation
-          transcripts: Object.keys(transcriptData).length > 0 ? transcriptData : undefined,
+          evaluationMode, // 'basic' (text-based) or 'accuracy' (audio-based)
+          // Include text-based analysis data for cheaper evaluation (only for basic mode)
+          transcripts: evaluationMode === 'basic' && Object.keys(transcriptData).length > 0 ? transcriptData : undefined,
         },
       });
 
@@ -1828,8 +1832,9 @@ export default function AIPracticeSpeakingTest() {
     return (
       <div className="min-h-screen bg-secondary flex flex-col items-center justify-center gap-4">
         <MicrophoneTest 
-          onTestComplete={(accent) => {
+          onTestComplete={(accent, evalMode) => {
             setSelectedAccent(accent);
+            setEvaluationMode(evalMode);
             setShowMicrophoneTest(false);
             // Enter fullscreen mode automatically
             enterFullscreen();
@@ -1838,6 +1843,7 @@ export default function AIPracticeSpeakingTest() {
           }}
           onBack={() => navigate('/ai-practice')}
           initialAccent={selectedAccent}
+          initialEvaluationMode={evaluationMode}
         />
         {/* Browser compatibility check for speech analysis */}
         <div className="max-w-md w-full px-4">

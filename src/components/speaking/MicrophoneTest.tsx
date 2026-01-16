@@ -18,16 +18,20 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+
 import { detectBrowser, ACCENT_OPTIONS, getStoredAccent, setStoredAccent } from '@/lib/speechRecognition';
 
 // Re-export for backwards compatibility
 export { ACCENT_OPTIONS };
 export type AccentCode = typeof ACCENT_OPTIONS[number]['value'];
+export type EvaluationMode = 'basic' | 'accuracy';
 
 interface MicrophoneTestProps {
-  onTestComplete: (selectedAccent: AccentCode) => void;
+  onTestComplete: (selectedAccent: AccentCode, evaluationMode: EvaluationMode) => void;
   onBack?: () => void;
   initialAccent?: AccentCode;
+  initialEvaluationMode?: EvaluationMode;
 }
 
 // Helper to check if microphone permission is already granted
@@ -52,7 +56,7 @@ const OPTIMIZED_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   sampleRate: { ideal: 48000 },
 };
 
-export function MicrophoneTest({ onTestComplete, onBack, initialAccent }: MicrophoneTestProps) {
+export function MicrophoneTest({ onTestComplete, onBack, initialAccent, initialEvaluationMode }: MicrophoneTestProps) {
   // Browser detection for conditional UI
   const [browser] = useState(() => detectBrowser());
   
@@ -70,6 +74,9 @@ export function MicrophoneTest({ onTestComplete, onBack, initialAccent }: Microp
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [micAccessGranted, setMicAccessGranted] = useState(false);
+  
+  // Evaluation mode selection - basic (text-based) or accuracy (audio-based)
+  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>(initialEvaluationMode || 'basic');
   
   // Accent selection - use stored accent or default based on browser
   const [selectedAccent, setSelectedAccent] = useState<AccentCode>(() => {
@@ -417,9 +424,57 @@ export function MicrophoneTest({ onTestComplete, onBack, initialAccent }: Microp
         </p>
       )}
 
+      {/* Evaluation Mode Selection */}
+      <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-center gap-2 text-sm font-medium text-foreground">
+          <Info className="w-4 h-4" />
+          Evaluation Mode
+        </div>
+        <RadioGroup
+          value={evaluationMode}
+          onValueChange={(v) => setEvaluationMode(v as EvaluationMode)}
+          className="grid grid-cols-1 gap-3"
+        >
+          <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background cursor-pointer hover:bg-muted/30 transition-colors"
+               onClick={() => setEvaluationMode('basic')}>
+            <RadioGroupItem value="basic" id="eval-basic" className="mt-0.5" />
+            <div className="flex-1">
+              <label htmlFor="eval-basic" className="font-medium cursor-pointer">Basic Evaluation</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Uses browser speech recognition for evaluation. Faster and uses less AI tokens.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background cursor-pointer hover:bg-muted/30 transition-colors"
+               onClick={() => setEvaluationMode('accuracy')}>
+            <RadioGroupItem value="accuracy" id="eval-accuracy" className="mt-0.5" />
+            <div className="flex-1">
+              <label htmlFor="eval-accuracy" className="font-medium cursor-pointer">Accuracy Mode</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Sends audio directly to AI for evaluation. More accurate but uses more tokens.
+              </p>
+            </div>
+          </div>
+        </RadioGroup>
+
+        {/* Warning messages based on selection */}
+        {evaluationMode === 'basic' && browser.isChrome && (
+          <div className="flex items-start gap-2 p-2 bg-warning/10 border border-warning/30 rounded text-xs text-warning">
+            <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <p>For better accuracy in Basic mode, we recommend using <strong>Microsoft Edge</strong> browser.</p>
+          </div>
+        )}
+        {evaluationMode === 'accuracy' && (
+          <div className="flex items-start gap-2 p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-destructive">
+            <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <p>Accuracy Mode uses significantly more AI tokens. You may hit your daily limit faster.</p>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-col gap-3 mt-6">
         <Button
-          onClick={() => onTestComplete(selectedAccent)}
+          onClick={() => onTestComplete(selectedAccent, evaluationMode)}
           disabled={!micAccessGranted && testPassed !== true}
           className="w-full"
         >
