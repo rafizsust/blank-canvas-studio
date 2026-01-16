@@ -459,7 +459,11 @@ async function processJob(job: any, supabaseService: any, appEncryptionKey: stri
         
         const model = genAI.getGenerativeModel({ 
           model: modelName,
-          generationConfig: { temperature: 0.3, maxOutputTokens: 65000 },
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 65000,
+            responseMimeType: 'application/json', // Force JSON output for reliable parsing
+          },
         });
 
         // Build content: files in order, then prompt
@@ -487,7 +491,7 @@ async function processJob(job: any, supabaseService: any, appEncryptionKey: stri
               console.log(`[processJob] Success with ${modelName}`);
               break;
             } else {
-              console.warn(`[processJob] Failed to parse JSON`);
+              console.warn(`[processJob] Failed to parse JSON from ${modelName}. First 400 chars: ${text.slice(0, 400)}`);
               break;
             }
           } catch (err: any) {

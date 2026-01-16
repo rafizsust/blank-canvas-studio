@@ -427,7 +427,11 @@ serve(async (req) => {
             
             const model = genAI.getGenerativeModel({ 
               model: modelName,
-              generationConfig: { temperature: 0.3, maxOutputTokens: 20000 },
+              generationConfig: {
+                temperature: 0.3,
+                maxOutputTokens: 20000,
+                responseMimeType: 'application/json', // Force JSON output for reliable parsing
+              },
             });
 
             const contentParts: any[] = [...partFileUris, { text: partPrompt }];
@@ -466,7 +470,7 @@ serve(async (req) => {
                   await perfLogger.logSuccess(modelName, responseTimeMs, candidateKey.keyId || undefined);
                   break;
                 } else {
-                  console.warn(`[speaking-evaluate-job] Failed to parse JSON from ${modelName}`);
+                  console.warn(`[speaking-evaluate-job] Failed to parse JSON from ${modelName}. First 400 chars: ${text.slice(0, 400)}`);
                   await perfLogger.logError(modelName, 'Failed to parse JSON', responseTimeMs, candidateKey.keyId || undefined);
                   break;
                 }
