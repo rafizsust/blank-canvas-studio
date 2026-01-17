@@ -763,8 +763,8 @@ export default function SpeakingEvaluationReport() {
                                           {upgrade.upgraded}
                                         </Badge>
                                         <AddToFlashcardButton 
-                                          word={upgrade.upgraded} 
-                                          meaning={`Better alternative to "${upgrade.original}"`}
+                                          word={upgrade.upgraded}
+                                          meaning={`Better alternative to: "${upgrade.original}"`}
                                           example={upgrade.context}
                                           variant="icon"
                                         />

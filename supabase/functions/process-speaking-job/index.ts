@@ -561,6 +561,25 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
   // Build the prompt
   const prompt = buildTextPrompt(transcripts, topic || testRow.topic, difficulty || testRow.difficulty, fluency_flag, testRow.payload);
 
+  // Count parts in transcripts for progress tracking
+  const partsPresent = new Set<number>();
+  for (const key of Object.keys(transcripts)) {
+    const match = key.match(/^part([123])/);
+    if (match) partsPresent.add(parseInt(match[1]));
+  }
+  const totalParts = partsPresent.size || 3;
+
+  // Update progress: Starting evaluation (10%)
+  await supabaseService
+    .from('speaking_evaluation_jobs')
+    .update({ 
+      progress: 10, 
+      current_part: 1,
+      total_parts: totalParts,
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', jobId);
+
   let evaluationResult: any = null;
   const MAX_KEY_RETRIES = 3; // Retry each key up to 3 times with backoff
 
@@ -577,10 +596,15 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
         try {
           console.log(`[processTextBasedEvaluation] Trying ${modelName} (attempt ${attempt + 1}/${MAX_KEY_RETRIES})`);
           
-          // Update heartbeat to prevent watchdog from killing us
+          // Update progress: Evaluating Part 1 (20-30%)
           await supabaseService
             .from('speaking_evaluation_jobs')
-            .update({ heartbeat_at: new Date().toISOString() })
+            .update({ 
+              heartbeat_at: new Date().toISOString(),
+              progress: 20 + (attempt * 5),
+              current_part: 1,
+              updated_at: new Date().toISOString()
+            })
             .eq('id', jobId);
           
           const model = genAI.getGenerativeModel({
@@ -610,10 +634,31 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
           // Log response length for debugging
           console.log(`[processTextBasedEvaluation] Response length: ${text.length} chars`);
 
+          // Update progress: Received response, processing Part 2 (50%)
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({ 
+              progress: 50, 
+              current_part: 2,
+              updated_at: new Date().toISOString() 
+            })
+            .eq('id', jobId);
+
           const parsed = parseJson(text);
           if (parsed) {
             evaluationResult = parsed;
             console.log(`[processTextBasedEvaluation] Success with ${modelName} on attempt ${attempt + 1}`);
+            
+            // Update progress: Evaluation complete, processing Part 3 (80%)
+            await supabaseService
+              .from('speaking_evaluation_jobs')
+              .update({ 
+                progress: 80, 
+                current_part: 3,
+                updated_at: new Date().toISOString() 
+              })
+              .eq('id', jobId);
+            
             break;
           } else {
             // Log first 500 chars to help debug truncation issues

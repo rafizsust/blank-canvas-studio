@@ -1048,7 +1048,7 @@ export default function AISpeakingResults() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                                {report.recognition_corrections.map((correction, i) => (
+                                {report.recognition_corrections.map((correction, i) => (
                                                     <tr key={i} className="border-b last:border-0">
                                                       <td className="py-3 px-2 max-w-[140px] md:max-w-[200px]">
                                                         <Badge variant="outline" className="bg-warning/10 text-warning-foreground border-warning/30 whitespace-normal break-words text-left inline-block max-w-full">
@@ -1056,9 +1056,17 @@ export default function AISpeakingResults() {
                                                         </Badge>
                                                       </td>
                                                       <td className="py-3 px-2 max-w-[140px] md:max-w-[200px]">
-                                                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 whitespace-normal break-words text-left inline-block max-w-full">
-                                                          {correction.intended}
-                                                        </Badge>
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 whitespace-normal break-words text-left inline-block max-w-full">
+                                                            {correction.intended}
+                                                          </Badge>
+                                                          <AddToFlashcardButton 
+                                                            word={correction.intended}
+                                                            meaning={`You said: "${correction.captured}"`}
+                                                            example={correction.context}
+                                                            variant="icon"
+                                                          />
+                                                        </div>
                                                       </td>
                                                       <td className="py-3 px-2 text-muted-foreground italic hidden md:table-cell max-w-[250px]">
                                                         <span className="line-clamp-3 break-words">"{correction.context}"</span>
@@ -1136,8 +1144,8 @@ export default function AISpeakingResults() {
                                             {upgrade.upgraded}
                                           </Badge>
                                           <AddToFlashcardButton 
-                                            word={upgrade.original} 
-                                            meaning={upgrade.upgraded}
+                                            word={upgrade.upgraded}
+                                            meaning={`Better alternative to: "${upgrade.original}"`}
                                             example={upgrade.context}
                                             variant="icon"
                                           />

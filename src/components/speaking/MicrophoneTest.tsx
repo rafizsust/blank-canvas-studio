@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, Play, Pause, StopCircle, Loader2, CheckCircle2, XCircle, Volume2, VolumeX, ArrowLeft, Globe, Info, AlertTriangle } from 'lucide-react';
+import { Mic, Play, Square, Loader2, CheckCircle2, XCircle, Volume2, VolumeX, ArrowLeft, Globe, Info, AlertTriangle, Headphones, Radio } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
@@ -217,13 +217,18 @@ export function MicrophoneTest({ onTestComplete, onBack, initialAccent, initialE
 
   const playRecording = useCallback(() => {
     if (recordedAudioUrl.current && audioPlayerRef.current) {
-      audioPlayerRef.current.src = recordedAudioUrl.current;
-      audioPlayerRef.current.play().catch(e => console.error("Error playing audio:", e));
-      setIsPlaying(true);
+      if (isPlaying) {
+        audioPlayerRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        audioPlayerRef.current.src = recordedAudioUrl.current;
+        audioPlayerRef.current.play().catch(e => console.error("Error playing audio:", e));
+        setIsPlaying(true);
+      }
     } else {
       toast.error('No recording available to play.');
     }
-  }, []);
+  }, [isPlaying]);
 
   const handleAudioPlayerTimeUpdate = useCallback(() => {
     if (audioPlayerRef.current) {
@@ -272,200 +277,267 @@ export function MicrophoneTest({ onTestComplete, onBack, initialAccent, initialE
 
   if (checkingPermission) {
     return (
-      <div className="p-6 max-w-md mx-auto bg-card border border-border rounded-lg shadow-lg space-y-6 text-center">
-        <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary" />
-        <p className="text-muted-foreground">Checking microphone access...</p>
+      <div className="p-8 max-w-lg mx-auto">
+        <div className="flex flex-col items-center justify-center gap-4">
+          <div className="relative w-16 h-16">
+            <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin"></div>
+            <Mic className="absolute inset-0 m-auto w-6 h-6 text-primary" />
+          </div>
+          <p className="text-muted-foreground text-sm">Checking microphone access...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-md mx-auto bg-card border border-border rounded-lg shadow-lg space-y-6 text-center">
-      {/* Back button */}
-      {onBack && (
-        <div className="flex justify-start -mt-2 -ml-2">
-          <Button variant="ghost" size="sm" onClick={onBack} className="gap-1">
-            <ArrowLeft className="w-4 h-4" />
-            Back
+    <div className="max-w-lg mx-auto">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        {onBack && (
+          <Button variant="ghost" size="icon" onClick={onBack} className="shrink-0">
+            <ArrowLeft className="w-5 h-5" />
           </Button>
+        )}
+        <div>
+          <h2 className="text-xl font-semibold text-foreground">Microphone Setup</h2>
+          <p className="text-sm text-muted-foreground">
+            {micAccessGranted 
+              ? 'Ready to go! Test your mic or start the test.'
+              : 'Record a quick sample to verify your microphone works.'}
+          </p>
         </div>
-      )}
-      
-      <h2 className="text-2xl font-bold text-foreground">Microphone Test</h2>
-      <p className="text-muted-foreground">
-        {micAccessGranted 
-          ? 'Your microphone is ready. You can test it below or start the speaking test directly.'
-          : 'Click "Record" to test your microphone. Speak a few words, then click "Stop" and "Play" to listen.'
-        }
-      </p>
-
-      {/* Recording indicator */}
-      {isRecording && (
-        <div className="flex items-center justify-center gap-3 py-3 px-4 bg-destructive/10 border border-destructive/30 rounded-lg animate-pulse">
-          <div className="relative">
-            <div className="w-4 h-4 bg-destructive rounded-full animate-ping absolute" />
-            <div className="w-4 h-4 bg-destructive rounded-full relative" />
-          </div>
-          <span className="text-destructive font-medium">Recording in progress...</span>
-        </div>
-      )}
-
-
-      <div className="flex justify-center gap-4">
-        <Button
-          onClick={isRecording ? stopRecording : startRecording}
-          disabled={loading || isPlaying}
-          className={cn(
-            "h-12 w-28",
-            isRecording ? "bg-destructive hover:bg-destructive/90" : "bg-primary hover:bg-primary/90"
-          )}
-        >
-          {loading ? <Loader2 size={20} className="animate-spin" /> : isRecording ? <StopCircle size={20} className="mr-2" /> : <Mic size={20} className="mr-2" />}
-          {loading ? 'Loading...' : isRecording ? 'Stop' : 'Record'}
-        </Button>
-        <Button
-          onClick={playRecording}
-          disabled={!recordedAudioUrl.current || isRecording || isPlaying}
-          className="h-12 w-28"
-          variant="outline"
-        >
-          {isPlaying ? <Pause size={20} className="mr-2" /> : <Play size={20} className="mr-2" />}
-          {isPlaying ? 'Playing...' : 'Play'}
-        </Button>
       </div>
 
-      {recordedAudioUrl.current && (
-        <div className="space-y-3 mt-4">
-          <audio
-            ref={audioPlayerRef}
-            onTimeUpdate={handleAudioPlayerTimeUpdate}
-            onEnded={handleAudioPlayerEnded}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            preload="auto"
-          />
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground w-10 text-right">
-              {formatTime(currentTime)}
-            </span>
-            <Slider
-              value={[currentTime]}
-              max={duration}
-              step={1}
-              onValueChange={handleSeek}
-              className="flex-1"
-              disabled={isRecording || !recordedAudioUrl.current}
-            />
-            <span className="text-sm text-muted-foreground w-10 text-left">
-              {formatTime(duration)}
-            </span>
+      {/* Microphone Test Section */}
+      <div className="bg-card border border-border rounded-xl p-6 mb-4">
+        <div className="flex items-center gap-3 mb-4">
+          <div className={cn(
+            "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+            micAccessGranted ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+          )}>
+            <Mic className="w-5 h-5" />
           </div>
-          <div className="flex items-center justify-center gap-2">
-            <Button variant="ghost" size="icon" onClick={toggleMute} className="h-8 w-8">
-              {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-            </Button>
-            <Slider
-              value={[isMuted ? 0 : volume * 100]}
-              max={100}
-              step={1}
-              onValueChange={handleVolumeChange}
-              className="w-24"
-              disabled={isRecording || !recordedAudioUrl.current}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Status messages */}
-      {testPassed === true && recordedAudioUrl.current && (
-        <p className="text-success flex items-center justify-center gap-2 mt-4">
-          <CheckCircle2 size={20} /> Microphone test successful!
-        </p>
-      )}
-      {testPassed === false && (
-        <p className="text-destructive flex items-center justify-center gap-2 mt-4">
-          <XCircle size={20} /> Microphone test failed. Please try again.
-        </p>
-      )}
-      {micAccessGranted && !recordedAudioUrl.current && (
-        <p className="text-success flex items-center justify-center gap-2 mt-4">
-          <CheckCircle2 size={20} /> Microphone access granted
-        </p>
-      )}
-
-      {/* TTS Not Working Warning */}
-      {evaluationMode === 'basic' && (!ttsStatus.supported || !ttsStatus.hasVoices) && (
-        <Alert variant="destructive" className="text-left">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>
-            <strong>Browser Text-to-Speech is not available.</strong>
-            <p className="mt-1 text-xs">
-              The examiner questions will be shown as text. Please read each question carefully and record your spoken response.
+          <div className="flex-1">
+            <h3 className="font-medium text-sm">Microphone Check</h3>
+            <p className="text-xs text-muted-foreground">
+              {micAccessGranted ? 'Microphone access granted' : 'Click Record to test'}
             </p>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Evaluation Mode Selection */}
-      <div className="bg-muted/50 rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-center gap-2 text-sm font-medium text-foreground">
-          <Info className="w-4 h-4" />
-          Evaluation Mode
+          </div>
+          {micAccessGranted && !recordedAudioUrl.current && (
+            <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+          )}
         </div>
+
+        {/* Recording Controls */}
+        <div className="flex items-center gap-3 justify-center">
+          <Button
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={loading || isPlaying}
+            variant={isRecording ? "destructive" : "default"}
+            size="lg"
+            className="min-w-32"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : isRecording ? (
+              <>
+                <Square className="w-4 h-4 mr-2" />
+                Stop
+              </>
+            ) : (
+              <>
+                <Radio className="w-4 h-4 mr-2" />
+                Record
+              </>
+            )}
+          </Button>
+          
+          {recordedAudioUrl.current && (
+            <Button
+              onClick={playRecording}
+              disabled={isRecording}
+              variant="outline"
+              size="lg"
+              className="min-w-32"
+            >
+              {isPlaying ? (
+                <>
+                  <Square className="w-4 h-4 mr-2" />
+                  Stop
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 mr-2" />
+                  Play
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+
+        {/* Recording Indicator */}
+        {isRecording && (
+          <div className="flex items-center justify-center gap-2 mt-4 py-2 px-4 bg-destructive/10 rounded-lg">
+            <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+            <span className="text-sm text-destructive font-medium">Recording...</span>
+          </div>
+        )}
+
+        {/* Audio Player */}
+        {recordedAudioUrl.current && !isRecording && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <audio
+              ref={audioPlayerRef}
+              onTimeUpdate={handleAudioPlayerTimeUpdate}
+              onEnded={handleAudioPlayerEnded}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              preload="auto"
+            />
+            
+            {/* Progress */}
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-xs text-muted-foreground w-10 text-right font-mono">
+                {formatTime(currentTime)}
+              </span>
+              <Slider
+                value={[currentTime]}
+                max={duration || 1}
+                step={0.1}
+                onValueChange={handleSeek}
+                className="flex-1"
+              />
+              <span className="text-xs text-muted-foreground w-10 font-mono">
+                {formatTime(duration)}
+              </span>
+            </div>
+            
+            {/* Volume */}
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="ghost" size="icon" onClick={toggleMute} className="h-8 w-8">
+                {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              </Button>
+              <Slider
+                value={[isMuted ? 0 : volume * 100]}
+                max={100}
+                step={1}
+                onValueChange={handleVolumeChange}
+                className="w-24"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Status Messages */}
+        {testPassed === true && recordedAudioUrl.current && (
+          <div className="flex items-center justify-center gap-2 mt-4 py-2 px-4 bg-success/10 rounded-lg">
+            <CheckCircle2 className="w-4 h-4 text-success" />
+            <span className="text-sm text-success font-medium">Test successful!</span>
+          </div>
+        )}
+        {testPassed === false && (
+          <div className="flex items-center justify-center gap-2 mt-4 py-2 px-4 bg-destructive/10 rounded-lg">
+            <XCircle className="w-4 h-4 text-destructive" />
+            <span className="text-sm text-destructive font-medium">Microphone access denied</span>
+          </div>
+        )}
+      </div>
+
+      {/* Evaluation Mode Section */}
+      <div className="bg-card border border-border rounded-xl p-6 mb-4">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Headphones className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-medium text-sm">Evaluation Mode</h3>
+            <p className="text-xs text-muted-foreground">Choose how your speech is analyzed</p>
+          </div>
+        </div>
+
         <RadioGroup
           value={evaluationMode}
           onValueChange={(v) => setEvaluationMode(v as EvaluationMode)}
-          className="grid grid-cols-1 gap-3"
+          className="space-y-2"
         >
-          <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background cursor-pointer hover:bg-muted/30 transition-colors"
-               onClick={() => setEvaluationMode('accuracy')}>
-            <RadioGroupItem value="accuracy" id="eval-accuracy" className="mt-0.5" />
-            <div className="flex-1">
-              <label htmlFor="eval-accuracy" className="font-medium cursor-pointer">Accuracy Mode</label>
+          <label 
+            className={cn(
+              "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+              evaluationMode === 'accuracy' 
+                ? "border-primary bg-primary/5" 
+                : "border-border hover:bg-muted/50"
+            )}
+            onClick={() => setEvaluationMode('accuracy')}
+          >
+            <RadioGroupItem value="accuracy" className="mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm">Accuracy Mode</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">Recommended</span>
+              </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Sends audio directly to AI for evaluation. More accurate but uses more tokens.
+                Audio sent directly to AI for precise evaluation
               </p>
             </div>
-          </div>
-          <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background cursor-pointer hover:bg-muted/30 transition-colors"
-               onClick={() => setEvaluationMode('basic')}>
-            <RadioGroupItem value="basic" id="eval-basic" className="mt-0.5" />
-            <div className="flex-1">
-              <label htmlFor="eval-basic" className="font-medium cursor-pointer">
-                Basic Evaluation <span className="text-xs text-destructive/80 font-normal">(frequent errors)</span>
-              </label>
+          </label>
+
+          <label 
+            className={cn(
+              "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+              evaluationMode === 'basic' 
+                ? "border-primary bg-primary/5" 
+                : "border-border hover:bg-muted/50"
+            )}
+            onClick={() => setEvaluationMode('basic')}
+          >
+            <RadioGroupItem value="basic" className="mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm">Basic Mode</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-warning/10 text-warning">Less reliable</span>
+              </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Uses browser speech recognition for evaluation. Faster and uses less AI tokens.
+                Uses browser speech recognition (faster, less accurate)
               </p>
             </div>
-          </div>
+          </label>
         </RadioGroup>
+
+        {/* TTS Not Working Warning */}
+        {evaluationMode === 'basic' && (!ttsStatus.supported || !ttsStatus.hasVoices) && (
+          <Alert variant="destructive" className="mt-3">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="text-xs">
+              Text-to-Speech unavailable. Questions will be shown as text.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Accent Selection - ONLY shown on Chrome AND Basic Evaluation mode */}
         {browser.isChrome && evaluationMode === 'basic' && (
-          <div className="bg-background/50 rounded-lg p-3 space-y-2 border">
-            <div className="flex items-center justify-center gap-2 text-xs font-medium text-foreground">
-              <Globe className="w-3.5 h-3.5" />
-              Select Your Accent
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="flex items-center gap-2 mb-2">
+              <Globe className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Your Accent</span>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                    <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs">
                     <p className="text-xs">
-                      Chrome requires accent selection for speech recognition. 
-                      This setting is remembered for future tests.
+                      Chrome requires accent selection for speech recognition. This is saved for future tests.
                     </p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
             <Select value={selectedAccent} onValueChange={(v) => handleAccentChange(v as AccentCode)}>
-              <SelectTrigger className="w-full bg-background text-sm h-9">
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select your accent" />
               </SelectTrigger>
-              <SelectContent className="bg-popover z-50">
+              <SelectContent>
                 {ACCENT_OPTIONS.map((accent) => (
                   <SelectItem key={accent.value} value={accent.value}>
                     {accent.label}
@@ -476,36 +548,37 @@ export function MicrophoneTest({ onTestComplete, onBack, initialAccent, initialE
           </div>
         )}
 
-        {/* Warning messages based on selection */}
+        {/* Mode-specific hints */}
         {evaluationMode === 'basic' && browser.isChrome && (
-          <div className="flex items-start gap-2 p-2 bg-warning/10 border border-warning/30 rounded text-xs text-warning">
-            <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <p>For better accuracy in Basic mode, we recommend using <strong>Microsoft Edge</strong> browser.</p>
+          <div className="flex items-start gap-2 mt-3 p-2 bg-warning/5 border border-warning/20 rounded-lg text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-warning" />
+            <p>For better accuracy in Basic mode, consider using Microsoft Edge.</p>
           </div>
         )}
+
         {evaluationMode === 'accuracy' && (
-          <div className="flex items-start gap-2 p-2 bg-primary/10 border border-primary/30 rounded text-xs text-primary">
-            <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <p>Accuracy Mode sends audio directly to AI — no browser speech recognition needed.</p>
+          <div className="flex items-start gap-2 mt-3 p-2 bg-primary/5 border border-primary/20 rounded-lg text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
+            <p>Audio is sent directly to AI — no browser speech recognition needed.</p>
           </div>
         )}
       </div>
 
-      <div className="flex flex-col gap-3 mt-6">
-        <Button
-          onClick={() => onTestComplete(selectedAccent, evaluationMode)}
-          disabled={!micAccessGranted && testPassed !== true}
-          className="w-full"
-        >
-          Start Speaking Test
-        </Button>
-        <p className="text-xs text-muted-foreground text-center">
-          {micAccessGranted 
-            ? 'Microphone access is ready. You can proceed or test your microphone first.'
-            : 'Microphone access is required to take the speaking test.'
-          }
-        </p>
-      </div>
+      {/* Start Button */}
+      <Button
+        onClick={() => onTestComplete(selectedAccent, evaluationMode)}
+        disabled={!micAccessGranted && testPassed !== true}
+        className="w-full h-12 text-base"
+        size="lg"
+      >
+        Start Speaking Test
+      </Button>
+      
+      <p className="text-xs text-muted-foreground text-center mt-3">
+        {micAccessGranted 
+          ? 'Your microphone is ready. Good luck!'
+          : 'Please grant microphone access to continue.'}
+      </p>
     </div>
   );
 }
