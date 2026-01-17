@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Sparkles, ArrowUp, CheckCircle2, Lightbulb, Target } from 'lucide-react';
+import { Sparkles, ArrowUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ModelAnswer {
@@ -73,10 +73,10 @@ function QuestionModelAnswer({
     if (hasNewFormatAnswer) return null;
     
     // Try to find any available model answer from legacy format
-    if (model.modelAnswerBand7) return { band: 7, answer: model.modelAnswerBand7, why: model.whyBand7Works };
-    if (model.modelAnswerBand8) return { band: 8, answer: model.modelAnswerBand8, why: model.whyBand8Works };
-    if (model.modelAnswerBand6) return { band: 6, answer: model.modelAnswerBand6, why: model.whyBand6Works };
-    if (model.modelAnswerBand9) return { band: 9, answer: model.modelAnswerBand9, why: model.whyBand9Works };
+    if (model.modelAnswerBand7) return { band: 7, answer: model.modelAnswerBand7 };
+    if (model.modelAnswerBand8) return { band: 8, answer: model.modelAnswerBand8 };
+    if (model.modelAnswerBand6) return { band: 6, answer: model.modelAnswerBand6 };
+    if (model.modelAnswerBand9) return { band: 9, answer: model.modelAnswerBand9 };
     
     return null;
   }, [model, hasNewFormatAnswer]);
@@ -87,8 +87,6 @@ function QuestionModelAnswer({
     : (legacyAnswer?.band || 7);
   
   const modelAnswerText = hasNewFormatAnswer ? model.modelAnswer! : (legacyAnswer?.answer || '');
-  const whyItWorks = hasNewFormatAnswer ? model.whyItWorks : (legacyAnswer?.why || model.keyFeatures);
-  const keyImprovements = model.keyImprovements;
   
   const config = getBandConfig(targetBand);
 
@@ -106,24 +104,17 @@ function QuestionModelAnswer({
         <p className="text-sm font-medium">{model.question}</p>
       </div>
       
-      {/* Candidate's Response */}
+      {/* Candidate's Response - without band badge */}
       {model.candidateResponse && (
         <div className="pl-3 md:pl-4 border-l-2 border-muted">
-          <div className="flex items-center gap-2 mb-1">
-            <p className="text-[10px] md:text-xs text-muted-foreground">Your response</p>
-            {model.estimatedBand && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                ~Band {model.estimatedBand.toFixed(1)}
-              </Badge>
-            )}
-          </div>
+          <p className="text-[10px] md:text-xs text-muted-foreground mb-1">Your response</p>
           <p className="text-xs md:text-sm italic text-muted-foreground">{model.candidateResponse}</p>
         </div>
       )}
       
-      {/* Target Model Answer - The Next Level */}
+      {/* Better Version - Simplified, no "Why this is Band X" */}
       <div className={cn(
-        "rounded-lg border-l-4 p-3 md:p-4 space-y-3",
+        "rounded-lg border-l-4 p-3 md:p-4 space-y-2",
         config.color,
         config.bgColor
       )}>
@@ -132,48 +123,12 @@ function QuestionModelAnswer({
           <Badge className={cn("text-xs font-bold", config.textColor, config.bgColor, "border", config.color)}>
             {config.label}
           </Badge>
-          <span className="text-xs text-muted-foreground">Target Answer</span>
+          <span className="text-xs text-muted-foreground">Better Version</span>
         </div>
         
         <p className="text-sm leading-relaxed">
           {modelAnswerText}
         </p>
-        
-        {/* Why This Band Works */}
-        {whyItWorks && whyItWorks.length > 0 && (
-          <div className="pt-2 border-t border-border/50">
-            <p className={cn("text-xs font-medium mb-2 flex items-center gap-1", config.textColor)}>
-              <Lightbulb className="w-3 h-3" />
-              Why this is {config.label}:
-            </p>
-            <ul className="space-y-1">
-              {whyItWorks.map((feature, j) => (
-                <li key={j} className="text-xs text-muted-foreground flex items-start gap-2">
-                  <CheckCircle2 className={cn("w-3 h-3 flex-shrink-0 mt-0.5", config.textColor)} />
-                  {feature}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        
-        {/* Key Improvements to Reach This Level */}
-        {keyImprovements && keyImprovements.length > 0 && (
-          <div className="pt-2 border-t border-border/50">
-            <p className="text-xs font-medium mb-2 flex items-center gap-1 text-primary">
-              <Target className="w-3 h-3" />
-              To reach this level:
-            </p>
-            <ul className="space-y-1">
-              {keyImprovements.map((improvement, j) => (
-                <li key={j} className="text-xs text-muted-foreground flex items-start gap-2">
-                  <span className="text-primary">•</span>
-                  {improvement}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </div>
   );

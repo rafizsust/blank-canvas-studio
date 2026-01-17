@@ -6,7 +6,7 @@
  * 1. CAPTURE EVERYTHING THE USER SAYS
  *    - No aggressive deduplication that removes legitimate repeated sentences
  *    - No ghost word recovery that corrupts transcripts
- *    - Simple exact-duplicate prevention only
+ *    - Smart overlap detection to prevent sentence boundary issues
  * 
  * 2. ONE CENTRAL RECOGNITION INSTANCE per session
  *    - Only create one SpeechRecognition object per recording session
@@ -84,6 +84,68 @@ const MAX_CONSECUTIVE_FAILURES = 10;
 // Maximum retry attempts for transient errors
 const MAX_TRANSIENT_RETRIES = 3;
 
+/**
+ * Normalize text for comparison (lowercase, trim, remove extra spaces and punctuation)
+ */
+function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[.,!?;:'"]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Check if two texts are similar enough to be considered duplicates
+ * Uses fuzzy matching to handle punctuation/case differences
+ */
+function areSimilarTexts(text1: string, text2: string): boolean {
+  const norm1 = normalizeForComparison(text1);
+  const norm2 = normalizeForComparison(text2);
+  
+  if (norm1 === norm2) return true;
+  
+  // Check if one contains the other (substring match)
+  if (norm1.includes(norm2) || norm2.includes(norm1)) {
+    const shorter = norm1.length < norm2.length ? norm1 : norm2;
+    const longer = norm1.length >= norm2.length ? norm1 : norm2;
+    // Only consider similar if the shorter is at least 80% of the longer
+    if (shorter.length / longer.length > 0.8) return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Check if text overlaps significantly with the end of the last segment
+ * This prevents the "Almost therapeutic to me." + "You know, it's kind of therapeutic to me." issue
+ */
+function getOverlapWithLastSegment(newText: string, lastSegment: string): { hasOverlap: boolean; trimmedText: string } {
+  if (!lastSegment || !newText) return { hasOverlap: false, trimmedText: newText };
+  
+  const normNew = normalizeForComparison(newText);
+  const normLast = normalizeForComparison(lastSegment);
+  
+  // Get the last few words of the previous segment
+  const lastWords = normLast.split(' ').slice(-5).join(' ');
+  
+  // Check if the new text starts with words that overlap with the end of the last segment
+  const newWords = normNew.split(' ');
+  
+  for (let i = 1; i <= Math.min(5, newWords.length - 1); i++) {
+    const prefix = newWords.slice(0, i).join(' ');
+    if (lastWords.includes(prefix) || prefix.includes(lastWords.slice(-prefix.length))) {
+      // Found overlap - trim the overlapping portion
+      const trimmed = newWords.slice(i).join(' ').trim();
+      if (trimmed.length > 0) {
+        return { hasOverlap: true, trimmedText: trimmed };
+      }
+    }
+  }
+  
+  return { hasOverlap: false, trimmedText: newText };
+}
+
 export function useBrowserAdaptiveSpeechRecognition(
   config: SpeechRecognitionConfig = {}
 ): UseSpeechRecognitionReturn {
@@ -121,6 +183,9 @@ export function useBrowserAdaptiveSpeechRecognition(
   // Silence timeout (for extended periods of no speech)
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
+  // Pending flush timer - waits for final result before flushing interim
+  const pendingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
   // Failure tracking
   const consecutiveFailuresRef = useRef(0);
   const transientRetryCountRef = useRef(0);
@@ -131,9 +196,12 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   // Track latest interim text so we can flush it on stop/onend (prevents tail cut-offs)
   const latestInterimRef = useRef('');
+  
+  // Pending interim text waiting to be flushed (with smarter deduplication)
+  const pendingInterimRef = useRef('');
 
-  // Simple exact-duplicate prevention (only prevents EXACT same segment back-to-back)
-  const lastExactFinalRef = useRef('');
+  // Last final text for smarter duplicate prevention
+  const lastFinalTextRef = useRef('');
   
   // Helpers
   const pauseTrackerRef = useRef(new PauseTracker());
@@ -157,6 +225,7 @@ export function useBrowserAdaptiveSpeechRecognition(
       }
       if (watchdogTimerRef.current) clearInterval(watchdogTimerRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (pendingFlushTimerRef.current) clearTimeout(pendingFlushTimerRef.current);
     };
   }, []);
 
@@ -186,6 +255,15 @@ export function useBrowserAdaptiveSpeechRecognition(
       }
     }, mergedConfig.silenceTimeoutMs);
   }, [mergedConfig.silenceTimeoutMs]);
+
+  // ==================== HELPER: Clear pending flush ====================
+  const clearPendingFlush = useCallback(() => {
+    if (pendingFlushTimerRef.current) {
+      clearTimeout(pendingFlushTimerRef.current);
+      pendingFlushTimerRef.current = null;
+    }
+    pendingInterimRef.current = '';
+  }, []);
 
   // ==================== CORE: Create recognition instance ====================
   const createRecognitionInstance = useCallback((): SpeechRecognitionType | null => {
@@ -245,7 +323,8 @@ export function useBrowserAdaptiveSpeechRecognition(
           
           isRestartingRef.current = false;
           sessionStartRef.current = Date.now();
-          lastExactFinalRef.current = ''; // Clear duplicate check for new session
+          lastFinalTextRef.current = ''; // Clear duplicate check for new session
+          clearPendingFlush();
           
           if (recognitionRef.current) {
             try {
@@ -260,7 +339,7 @@ export function useBrowserAdaptiveSpeechRecognition(
         }, delay);
       }
     }
-  }, [browser.isEdge]);
+  }, [browser.isEdge, clearPendingFlush]);
   
   // Keep ref in sync
   useEffect(() => {
@@ -269,10 +348,10 @@ export function useBrowserAdaptiveSpeechRecognition(
 
   // ==================== HANDLER: onresult ====================
   /**
-   * CRITICAL: This is the SIMPLE, ROBUST version.
-   * - No overlap detection (it was removing repeated sentences)
-   * - No ghost word recovery (it was corrupting transcripts)
-   * - Only exact-duplicate prevention for immediate back-to-back duplicates
+   * IMPROVED: Smart duplicate detection with overlap handling
+   * - Fuzzy matching for similar texts
+   * - Overlap detection to prevent sentence boundary issues
+   * - Pending flush buffer for better interim handling
    */
   const handleResult = useCallback((event: Event) => {
     if (!isRecordingRef.current) return;
@@ -298,39 +377,44 @@ export function useBrowserAdaptiveSpeechRecognition(
       if (result.isFinal) {
         const trimmed = transcript.trim();
 
-        // If we previously had interim text and now got a final, clear it (final supersedes flush).
-        if (latestInterimRef.current) {
-          latestInterimRef.current = '';
-        }
+        // Clear any pending interim flush since we got a real final
+        clearPendingFlush();
+        latestInterimRef.current = '';
 
-        // ONLY skip if this is EXACTLY the same as the last final (back-to-back duplicate)
-        // This prevents the SAME recognition result from being processed twice
-        // But ALLOWS the user to intentionally repeat sentences
-        if (trimmed === lastExactFinalRef.current) {
-          console.log('[SpeechRecognition] Skipping exact back-to-back duplicate');
+        // Skip if this is similar to the last final (fuzzy duplicate detection)
+        if (areSimilarTexts(trimmed, lastFinalTextRef.current)) {
+          console.log('[SpeechRecognition] Skipping similar duplicate:', trimmed.substring(0, 30));
           continue;
         }
 
         if (trimmed.length > 0) {
-          // Store as the last exact final for duplicate check
-          lastExactFinalRef.current = trimmed;
+          // Check for overlap with last segment and trim if needed
+          const lastSegment = finalSegmentsRef.current[finalSegmentsRef.current.length - 1] || '';
+          const { hasOverlap, trimmedText } = getOverlapWithLastSegment(trimmed, lastSegment);
+          
+          const textToAdd = hasOverlap ? trimmedText : trimmed;
+          
+          if (textToAdd.length > 0) {
+            // Store as the last final for duplicate check
+            lastFinalTextRef.current = trimmed;
 
-          // APPEND to our segments array - never modify previous segments
-          finalSegmentsRef.current.push(trimmed);
+            // APPEND to our segments array - never modify previous segments
+            finalSegmentsRef.current.push(textToAdd);
 
-          // Create word entries
-          const finalWords = trimmed.split(/\s+/).filter((w: string) => w.length > 0);
-          finalWords.forEach((text: string) => {
-            newWords.push({
-              text,
-              timestamp: Date.now(),
-              wordId: wordIdCounterRef.current++,
-              isGhost: false,
-              isFiller: false, // Simple mode - no filler detection here
+            // Create word entries
+            const finalWords = textToAdd.split(/\s+/).filter((w: string) => w.length > 0);
+            finalWords.forEach((text: string) => {
+              newWords.push({
+                text,
+                timestamp: Date.now(),
+                wordId: wordIdCounterRef.current++,
+                isGhost: false,
+                isFiller: false,
+              });
             });
-          });
 
-          console.log('[SpeechRecognition] Final segment added:', trimmed.substring(0, 50));
+            console.log('[SpeechRecognition] Final segment added:', textToAdd.substring(0, 50), hasOverlap ? '(overlap trimmed)' : '');
+          }
         }
       } else {
         newInterimText = transcript;
@@ -347,7 +431,7 @@ export function useBrowserAdaptiveSpeechRecognition(
     }
 
     setInterimTranscript(newInterimText);
-  }, [resetSilenceTimeout]);
+  }, [resetSilenceTimeout, clearPendingFlush]);
 
   // ==================== HANDLER: onerror ====================
   const handleError = useCallback((event: Event) => {
@@ -391,20 +475,28 @@ export function useBrowserAdaptiveSpeechRecognition(
       hasInterimToFlush: Boolean(latestInterimRef.current?.trim()),
     });
 
-    // Flush latest interim text to avoid losing tail words.
-    // This is intentionally conservative: it may cause minor duplication in rare cases,
-    // but it prevents the more harmful failure mode (missing words at the end/middle).
+    // Smart interim flush with pending buffer
     const flushInterimIfAny = () => {
       const interim = latestInterimRef.current?.trim();
       if (!interim) return;
 
-      // Avoid flushing if it's an exact duplicate of the last final.
-      if (interim === lastExactFinalRef.current) {
+      // Check if it's similar to the last final (fuzzy match)
+      if (areSimilarTexts(interim, lastFinalTextRef.current)) {
         latestInterimRef.current = '';
         return;
       }
 
-      finalSegmentsRef.current.push(interim);
+      // Check for overlap with last segment
+      const lastSegment = finalSegmentsRef.current[finalSegmentsRef.current.length - 1] || '';
+      const { hasOverlap, trimmedText } = getOverlapWithLastSegment(interim, lastSegment);
+      
+      const textToFlush = hasOverlap ? trimmedText : interim;
+      
+      if (textToFlush.length > 0) {
+        finalSegmentsRef.current.push(textToFlush);
+        console.log('[SpeechRecognition] Flushed interim:', textToFlush.substring(0, 50), hasOverlap ? '(overlap trimmed)' : '');
+      }
+      
       latestInterimRef.current = '';
 
       const fullTranscript = finalSegmentsRef.current.join(' ');
@@ -432,7 +524,8 @@ export function useBrowserAdaptiveSpeechRecognition(
 
         isRestartingRef.current = false;
         sessionStartRef.current = Date.now();
-        lastExactFinalRef.current = ''; // Clear duplicate check for new session
+        lastFinalTextRef.current = ''; // Clear duplicate check for new session
+        clearPendingFlush();
 
         if (recognitionRef.current) {
           try {
@@ -463,7 +556,8 @@ export function useBrowserAdaptiveSpeechRecognition(
 
       isRestartingRef.current = false;
       sessionStartRef.current = Date.now();
-      lastExactFinalRef.current = ''; // Clear duplicate check for new session
+      lastFinalTextRef.current = ''; // Clear duplicate check for new session
+      clearPendingFlush();
 
       if (recognitionRef.current) {
         try {
@@ -476,7 +570,7 @@ export function useBrowserAdaptiveSpeechRecognition(
         }
       }
     }, delay);
-  }, [browser.isEdge]);
+  }, [browser.isEdge, clearPendingFlush]);
 
   // ==================== HANDLER: onstart ====================
   const handleStart = useCallback(() => {
@@ -573,7 +667,8 @@ export function useBrowserAdaptiveSpeechRecognition(
     
     // CRITICAL: Reset to empty segments array
     finalSegmentsRef.current = [];
-    lastExactFinalRef.current = '';
+    lastFinalTextRef.current = '';
+    clearPendingFlush();
     
     // Timing
     const now = Date.now();
@@ -593,7 +688,7 @@ export function useBrowserAdaptiveSpeechRecognition(
       console.error('[SpeechRecognition] Failed to start:', err);
       setError(err instanceof Error ? err : new Error('Failed to start speech recognition'));
     }
-  }, [isSupported, createRecognitionInstance, attachHandlers, resetSilenceTimeout]);
+  }, [isSupported, createRecognitionInstance, attachHandlers, resetSilenceTimeout, clearPendingFlush]);
 
   // ==================== PUBLIC: stopListening ====================
   /**
@@ -638,12 +733,19 @@ export function useBrowserAdaptiveSpeechRecognition(
       
       // Flush any remaining interim that wasn't converted to final
       const interim = latestInterimRef.current?.trim();
-      if (interim && interim !== lastExactFinalRef.current) {
-        console.log('[SpeechRecognition] Flushing remaining interim:', interim.substring(0, 50));
-        finalSegmentsRef.current.push(interim);
-        const fullTranscript = finalSegmentsRef.current.join(' ');
-        setFinalTranscript(fullTranscript);
-        setRawTranscript(fullTranscript);
+      if (interim && !areSimilarTexts(interim, lastFinalTextRef.current)) {
+        // Check for overlap
+        const lastSegment = finalSegmentsRef.current[finalSegmentsRef.current.length - 1] || '';
+        const { hasOverlap, trimmedText } = getOverlapWithLastSegment(interim, lastSegment);
+        const textToFlush = hasOverlap ? trimmedText : interim;
+        
+        if (textToFlush.length > 0) {
+          console.log('[SpeechRecognition] Flushing remaining interim:', textToFlush.substring(0, 50));
+          finalSegmentsRef.current.push(textToFlush);
+          const fullTranscript = finalSegmentsRef.current.join(' ');
+          setFinalTranscript(fullTranscript);
+          setRawTranscript(fullTranscript);
+        }
       }
       latestInterimRef.current = '';
       setInterimTranscript('');
@@ -671,6 +773,7 @@ export function useBrowserAdaptiveSpeechRecognition(
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+    clearPendingFlush();
     
     if (recognitionRef.current) {
       try {
@@ -682,7 +785,7 @@ export function useBrowserAdaptiveSpeechRecognition(
     }
     
     setIsListening(false);
-  }, []);
+  }, [clearPendingFlush]);
 
   // ==================== PUBLIC: clearTranscript ====================
   const clearTranscript = useCallback(() => {
@@ -694,9 +797,10 @@ export function useBrowserAdaptiveSpeechRecognition(
     setSessionDuration(0);
     wordIdCounterRef.current = 0;
     finalSegmentsRef.current = [];
-    lastExactFinalRef.current = '';
+    lastFinalTextRef.current = '';
+    clearPendingFlush();
     pauseTrackerRef.current.reset();
-  }, []);
+  }, [clearPendingFlush]);
 
   // ==================== PUBLIC: setAccent ====================
   const setAccent = useCallback((accent: string) => {
