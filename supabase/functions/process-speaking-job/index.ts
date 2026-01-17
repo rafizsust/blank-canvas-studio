@@ -897,6 +897,31 @@ CALIBRATION CHECKPOINTS:
 • Am I assessing LANGUAGE ABILITY, not personality or content?
 
 ═══════════════════════════════════════════════════════════════════════════════
+WEAKNESS FORMAT (CRITICAL FOR USER LEARNING)
+═══════════════════════════════════════════════════════════════════════════════
+
+Each weakness in the criteria MUST include an example quote from the transcript so users understand exactly where they made mistakes.
+
+Format: "Issue description. Example: 'exact quote from transcript demonstrating the issue'"
+
+Examples:
+✓ "Frequent hesitations interrupt flow. Example: 'I think... um... it's like... you know... important'"
+✓ "Limited vocabulary range for describing emotions. Example: 'I felt happy' instead of more nuanced expressions"
+✓ "Subject-verb agreement errors. Example: 'The people was going' should be 'The people were going'"
+
+═══════════════════════════════════════════════════════════════════════════════
+IMPROVEMENT PRIORITIES (REQUIRED - DO NOT LEAVE EMPTY)
+═══════════════════════════════════════════════════════════════════════════════
+
+Generate 2-3 improvement_priorities based on the LOWEST scoring criteria. These must be:
+1. Specific and actionable (not generic advice)
+2. Tied to the weakest criterion/criteria
+3. Include concrete examples or techniques
+
+Example: If Grammatical Range scores 5.5 (lowest), priority could be:
+"Focus on complex sentence structures: Practice using conditional sentences and relative clauses to demonstrate Band 6+ grammar flexibility"
+
+═══════════════════════════════════════════════════════════════════════════════
 REQUIRED JSON OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -909,10 +934,10 @@ REQUIRED JSON OUTPUT FORMAT
     "part3": 6.5
   },
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
-    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
-    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
-    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"], "disclaimer": "Estimated from speech recognition patterns" }
+    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue + Example: 'quote from transcript'"], "suggestions": ["tip1"] },
+    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue + Example: 'quote from transcript'"], "suggestions": ["tip1"] },
+    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue + Example: 'quote from transcript'"], "suggestions": ["tip1"] },
+    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue + Example: 'quote from transcript'"], "suggestions": ["tip1"], "disclaimer": "Estimated from speech recognition patterns" }
   },
   "summary": "Examiner's overall assessment summary (2-3 sentences)",
   "examiner_notes": "Professional observation on candidate's key areas for development",
@@ -933,14 +958,14 @@ REQUIRED JSON OUTPUT FORMAT
     }
   ],
   "lexical_upgrades": [{"original": "word used", "upgraded": "target band alternative", "context": "usage example"}],
-  "improvement_priorities": ["Priority 1...", "Priority 2..."],
+  "improvement_priorities": ["Focus on [lowest criterion]: specific actionable advice based on weaknesses", "Work on [second lowest]: concrete recommendation with example"],
   "strengths_to_maintain": ["Strength 1...", "Strength 2..."],
   "part_analysis": [
     {
       "part_number": 1,
       "performance_notes": "Part 1 assessment",
       "key_moments": ["Positive moment 1"],
-      "areas_for_improvement": ["Area 1"]
+      "areas_for_improvement": ["Area 1 with example quote"]
     }
   ],
   "transcripts_by_part": {

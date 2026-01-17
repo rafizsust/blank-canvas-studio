@@ -89,7 +89,8 @@ export function ProcessingCardSkeleton({
   stage,
   progress = 0,
   currentPart = 0,
-  totalParts = 3,
+  // totalParts intentionally unused - we now show "Processing Part X" instead of "Part X of Y"
+  totalParts: _totalParts = 3,
   retryCount = 0,
   onCancel,
   isCancelling,
@@ -133,7 +134,7 @@ export function ProcessingCardSkeleton({
             <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
               <span className="flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-                {progress > 0 ? `Part ${currentPart} of ${totalParts}` : 'Initializing...'}
+                {progress > 0 ? `Processing Part ${currentPart}` : 'Initializing...'}
               </span>
               <span>{progress > 0 ? `${progress}%` : ''}</span>
             </div>

@@ -117,16 +117,37 @@ Score harshly for poor responses:
 
 IMPORTANT OUTPUT LIMITS:
 - strengths: maximum 2 items per criterion
-- weaknesses: maximum 2 items per criterion
+- weaknesses: maximum 2 items per criterion (MUST include example quote from transcript in format: "Issue description. Example: 'exact quote from transcript'")
 - suggestions: maximum 2 items per criterion
 - whyItWorks: maximum 2 reasons
 - keyImprovements: maximum 2 items
 - lexical_upgrades: maximum 5 total
+- improvement_priorities: REQUIRED 2-3 specific priorities based on lowest scoring criteria
 
 MODEL ANSWER WORD COUNTS (REDUCED):
 - Part 1: ~50 words (natural, conversational)
 - Part 2: ~150 words (covers key cue card points)
 - Part 3: ~80 words (analytical with example)
+
+══════════════════════════════════════════════════════════════
+WEAKNESS FORMAT (IMPORTANT)
+══════════════════════════════════════════════════════════════
+Each weakness MUST include an example quote from the transcript to help the user understand exactly where they made the mistake.
+
+Format: "Issue description. Example: 'exact quote from transcript demonstrating the issue'"
+
+Examples:
+✓ "Frequent hesitations interrupt flow. Example: 'I think... um... it's like... you know... important'"
+✓ "Limited vocabulary range for describing emotions. Example: 'I felt happy' instead of more nuanced expressions"
+✓ "Subject-verb agreement errors. Example: 'The people was going' should be 'The people were going'"
+
+══════════════════════════════════════════════════════════════
+IMPROVEMENT PRIORITIES (REQUIRED)
+══════════════════════════════════════════════════════════════
+Generate 2-3 improvement priorities based on the LOWEST scoring criteria. Focus on:
+1. The most impactful areas for score improvement
+2. Specific, actionable recommendations
+3. Link to the weakest criterion/criteria
 
 ══════════════════════════════════════════════════════════════
 JSON OUTPUT SCHEMA
@@ -135,15 +156,15 @@ JSON OUTPUT SCHEMA
   "overall_band": 6.0,
   "part_scores": {"part1": 6.0, "part2": 5.5, "part3": 6.5},
   "criteria": {
-    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1","str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
-    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]},
-    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]},
-    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]}
+    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1","str2"], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": ["tip1"]},
+    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": [...]},
+    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": [...], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": [...]},
+    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": [...]}
   },
   "summary": "2-3 sentence performance summary",
   "lexical_upgrades": [{"original": "good", "upgraded": "beneficial", "context": "usage"}],
   "part_analysis": [{"part_number": 1, "performance_notes": "...", "key_moments": [], "areas_for_improvement": []}],
-  "improvement_priorities": ["Priority 1", "Priority 2"],
+  "improvement_priorities": ["Focus on [lowest criterion]: specific actionable advice", "Work on [second lowest]: concrete recommendation"],
   "strengths_to_maintain": ["Strength 1"],
   "transcripts_by_part": {"1": "...", "2": "...", "3": "..."},
   "transcripts_by_question": {
