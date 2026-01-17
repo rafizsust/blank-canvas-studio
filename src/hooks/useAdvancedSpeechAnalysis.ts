@@ -112,8 +112,13 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
 
   const consecutiveFailuresRef = useRef(0);
   
-  // Simple exact-duplicate prevention
+  // BULLETPROOF duplicate detection:
+  // 1. Exact duplicate check
+  // 2. Suffix overlap detection (prevents "..sentence" + "..last words of sentence" duplication)
+  // 3. Recent segments history for cross-checking
   const lastExactFinalRef = useRef('');
+  const recentFinalsRef = useRef<string[]>([]); // Keep last 5 finals for overlap checking
+  const MAX_RECENT_FINALS = 5;
 
   // CRITICAL: Track latest interim text for flushing on restart/stop
   // This prevents word loss when Chrome's watchdog triggers a restart
@@ -174,8 +179,69 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   }, []);
 
   /**
-   * Handle speech recognition results - SIMPLIFIED
-   * Just captures the final transcript without any processing
+   * Check if a new segment overlaps/duplicates with recent finals
+   * Returns true if it should be skipped (is a duplicate or overlap)
+   */
+  const isDuplicateOrOverlap = useCallback((newSegment: string): boolean => {
+    if (!newSegment) return true;
+
+    // Check 1: Exact match with last final
+    if (newSegment === lastExactFinalRef.current) {
+      console.log('[SpeechAnalysis] Skip: exact duplicate');
+      return true;
+    }
+
+    // Check 2: This segment is entirely contained in the last segment (subset)
+    if (lastExactFinalRef.current && lastExactFinalRef.current.includes(newSegment)) {
+      console.log('[SpeechAnalysis] Skip: subset of last segment');
+      return true;
+    }
+
+    // Check 3: Suffix overlap - new segment starts with text that ends the last segment
+    // This prevents "Hello how are you" + "are you doing today" = "Hello how are you are you doing today"
+    if (lastExactFinalRef.current && newSegment.length > 10) {
+      const lastWords = lastExactFinalRef.current.split(' ').slice(-6).join(' ').toLowerCase();
+      const newStart = newSegment.split(' ').slice(0, 6).join(' ').toLowerCase();
+      
+      // Find common suffix/prefix overlap
+      for (let overlapLen = Math.min(lastWords.length, newStart.length, 50); overlapLen > 10; overlapLen--) {
+        const lastSuffix = lastWords.slice(-overlapLen);
+        if (newStart.startsWith(lastSuffix)) {
+          console.log('[SpeechAnalysis] Skip: suffix overlap detected:', lastSuffix.substring(0, 30));
+          return true;
+        }
+      }
+    }
+
+    // Check 4: Check against recent finals (not just the last one)
+    for (const recentFinal of recentFinalsRef.current) {
+      if (recentFinal === newSegment) {
+        console.log('[SpeechAnalysis] Skip: matches a recent final');
+        return true;
+      }
+      // Check if new segment is contained in any recent final
+      if (recentFinal.includes(newSegment) && newSegment.length < recentFinal.length * 0.8) {
+        console.log('[SpeechAnalysis] Skip: contained in recent final');
+        return true;
+      }
+    }
+
+    return false;
+  }, []);
+
+  /**
+   * Add a segment to recent finals history (for overlap detection)
+   */
+  const addToRecentFinals = useCallback((segment: string) => {
+    recentFinalsRef.current.push(segment);
+    // Keep only the last N segments
+    if (recentFinalsRef.current.length > MAX_RECENT_FINALS) {
+      recentFinalsRef.current.shift();
+    }
+  }, []);
+
+  /**
+   * Handle speech recognition results - with BULLETPROOF duplicate detection
    */
   const handleResult = useCallback((event: SpeechRecognitionEvent) => {
     if (!isAnalyzingRef.current) return;
@@ -197,14 +263,14 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
           latestInterimRef.current = '';
         }
         
-        // Only skip if this is EXACTLY the same as the last final (back-to-back duplicate)
-        if (trimmed === lastExactFinalRef.current) {
-          console.log('[SpeechAnalysis] Skipping exact back-to-back duplicate');
+        // BULLETPROOF duplicate/overlap detection
+        if (isDuplicateOrOverlap(trimmed)) {
           continue;
         }
         
         if (trimmed.length > 0) {
           lastExactFinalRef.current = trimmed;
+          addToRecentFinals(trimmed);
           finalSegmentsRef.current.push(trimmed);
           console.log('[SpeechAnalysis] Final segment added:', trimmed.substring(0, 60));
         }
@@ -221,7 +287,7 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     
     setInterimTranscript(combined);
     options.onInterimResult?.(combined);
-  }, [options]);
+  }, [options, isDuplicateOrOverlap, addToRecentFinals]);
 
   /**
    * Handle recognition errors
@@ -242,13 +308,14 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   /**
    * CRITICAL: Flush any buffered interim text to final segments
    * This prevents word loss when Chrome's watchdog triggers a restart
+   * Uses same bulletproof duplicate detection as handleResult
    */
   const flushInterimToFinal = useCallback(() => {
     const interim = latestInterimRef.current?.trim();
     if (!interim) return false;
 
-    // Don't flush if it's exactly the same as last final (prevents duplicates)
-    if (interim === lastExactFinalRef.current) {
+    // Use the same bulletproof duplicate detection
+    if (isDuplicateOrOverlap(interim)) {
       latestInterimRef.current = '';
       return false;
     }
@@ -256,6 +323,7 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     console.log('[SpeechAnalysis] Flushing interim to final:', interim.substring(0, 60));
     finalSegmentsRef.current.push(interim);
     lastExactFinalRef.current = interim;
+    addToRecentFinals(interim);
     latestInterimRef.current = '';
 
     // Update displayed transcript
@@ -264,7 +332,7 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     options.onInterimResult?.(fullTranscript);
 
     return true;
-  }, [options]);
+  }, [options, isDuplicateOrOverlap, addToRecentFinals]);
 
   // Keep flushInterimToFinalRef always pointing to latest function
   flushInterimToFinalRef.current = flushInterimToFinal;
@@ -427,9 +495,10 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
 
     setInterimTranscript('');
 
-    // Reset to empty segments array
+    // Reset to empty segments array and clear duplicate detection history
     finalSegmentsRef.current = [];
     lastExactFinalRef.current = '';
+    recentFinalsRef.current = [];
     
     startTimeRef.current = Date.now();
     sessionStartRef.current = Date.now();

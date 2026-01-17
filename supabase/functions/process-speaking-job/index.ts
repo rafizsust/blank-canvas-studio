@@ -903,11 +903,16 @@ REQUIRED JSON OUTPUT FORMAT
 \`\`\`json
 {
   "overall_band": 6.5,
+  "part_scores": {
+    "part1": 6.0,
+    "part2": 6.5,
+    "part3": 6.5
+  },
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
-    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
-    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."] },
-    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."], "disclaimer": "Estimated from speech recognition patterns" }
+    "fluency_coherence": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
+    "lexical_resource": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
+    "grammatical_range": { "band": 6.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"] },
+    "pronunciation": { "band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"], "disclaimer": "Estimated from speech recognition patterns" }
   },
   "summary": "Examiner's overall assessment summary (2-3 sentences)",
   "examiner_notes": "Professional observation on candidate's key areas for development",

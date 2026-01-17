@@ -89,7 +89,7 @@
     --success-foreground: 0 0% 100%;
     
     --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
+    --warning-foreground: 30 80% 25%;
 
     /* Gradients */
     --gradient-ai: linear-gradient(135deg, hsl(187 85% 43%), hsl(262 83% 58%));
@@ -168,6 +168,12 @@
 
     --ai-glow: 0 0% 100%;
     --neural-grid: 0 0% 20%;
+    
+    --success: 160 70% 45%;
+    --success-foreground: 0 0% 100%;
+    
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 80% 15%;
 
     --gradient-hero: linear-gradient(135deg, hsl(0 0% 0% / 0.95), hsl(0 0% 0% / 0.9));
     --gradient-card: linear-gradient(180deg, hsl(0 0% 8%), hsl(0 0% 0%));

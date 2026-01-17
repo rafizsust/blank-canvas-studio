@@ -791,11 +791,12 @@ OUTPUT JSON SCHEMA
 ══════════════════════════════════════════════════════════════
 {
   "part_number": ${partNumber},
+  "part_band": 6.0,
   "criteria": {
-    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]},
-    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]},
-    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]},
-    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": [...], "suggestions": [...]}
+    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
+    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
+    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
+    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]}
   },
   "part_summary": "2-3 sentences summarizing Part ${partNumber} performance",
   "transcripts": [
@@ -810,13 +811,21 @@ OUTPUT JSON SCHEMA
       "candidateResponse": "EXACT transcript from audio",
       "estimatedBand": 5.5,
       "targetBand": 6,
-      "modelAnswer": "Model response written at EXACTLY the targetBand level",
+      "modelAnswer": "Model response written at EXACTLY the targetBand level (~50 words for Part 1, ~150 for Part 2, ~80 for Part 3)",
       "whyItWorks": ["reason1", "reason2"],
-      "keyImprovements": ["what the candidate should do to reach this level"]
+      "keyImprovements": ["improvement1"]
     }
   ],
   "lexical_upgrades": [{"original": "good", "upgraded": "beneficial", "context": "..."}]
 }
+
+IMPORTANT OUTPUT LIMITS:
+- strengths: maximum 2 items per criterion
+- weaknesses: maximum 2 items per criterion  
+- suggestions: maximum 2 items per criterion
+- whyItWorks: maximum 2 reasons
+- keyImprovements: maximum 2 items
+- lexical_upgrades: maximum 5 total
 
 ══════════════════════════════════════════════════════════════
 TARGET BAND CALCULATION RULES
@@ -914,17 +923,26 @@ function aggregatePartResults(
   if (part2.part_summary) partSummaries.push(`Part 2: ${part2.part_summary}`);
   if (part3.part_summary) partSummaries.push(`Part 3: ${part3.part_summary}`);
 
-  // Calculate overall band
+  // Calculate part_scores from per-part bands
+  const part_scores: { part1?: number; part2?: number; part3?: number } = {};
+  if (typeof part1.part_band === 'number') part_scores.part1 = part1.part_band;
+  if (typeof part2.part_band === 'number') part_scores.part2 = part2.part_band;
+  if (typeof part3.part_band === 'number') part_scores.part3 = part3.part_band;
+
+  // Calculate overall band using weighted part scores first, fall back to criteria average
+  const weightedBand = computeWeightedPartBand(part_scores);
   const criteriaScores = [
     criteria.fluency_coherence.band,
     criteria.lexical_resource.band,
     criteria.grammatical_range.band,
     criteria.pronunciation.band,
   ];
-  const overallBand = Math.round((criteriaScores.reduce((a, b) => a + b, 0) / 4) * 2) / 2;
+  const criteriaAvg = Math.round((criteriaScores.reduce((a, b) => a + b, 0) / 4) * 2) / 2;
+  const overallBand = weightedBand ?? criteriaAvg;
 
   return {
     overall_band: overallBand,
+    part_scores,
     criteria,
     summary: partSummaries.join(' ') || 'Evaluation complete.',
     transcripts_by_part,
