@@ -260,11 +260,46 @@ export default function TestBankRecommendations() {
     return qType.replace(/_/g, ' ').replace(/FULL TEST/gi, 'Full Test');
   };
 
-  // Get recommendations filtered by module, limited to 10 per module
+  // Get recommendations filtered by module, with MIXED question types
+  // Prioritize diversity: 1 of each question type before repeating
   const getModuleRecommendations = (module: string) => {
-    return allRecommendations
-      .filter((r) => r.module === module)
-      .slice(0, 10);
+    const moduleRecs = allRecommendations.filter((r) => r.module === module);
+    const questionTypes = QUESTION_TYPES[module] || ['mixed'];
+    
+    // Group by question type
+    const byType = new Map<string, RecommendationItem[]>();
+    questionTypes.forEach((qt) => byType.set(qt, []));
+    
+    moduleRecs.forEach((rec) => {
+      const existing = byType.get(rec.questionType);
+      if (existing) {
+        existing.push(rec);
+      } else {
+        byType.set(rec.questionType, [rec]);
+      }
+    });
+    
+    // Round-robin pick: take 1 from each question type in order until we have 10
+    const result: RecommendationItem[] = [];
+    let typeIndex = 0;
+    const maxIterations = moduleRecs.length; // Safety limit
+    let iterations = 0;
+    
+    while (result.length < 10 && iterations < maxIterations) {
+      const qt = questionTypes[typeIndex % questionTypes.length];
+      const pool = byType.get(qt);
+      
+      if (pool && pool.length > 0) {
+        // Take the first (lowest count) item from this type
+        const item = pool.shift()!;
+        result.push(item);
+      }
+      
+      typeIndex++;
+      iterations++;
+    }
+    
+    return result;
   };
 
   const renderRecommendationsList = (recommendations: RecommendationItem[]) => {

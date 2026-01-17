@@ -2811,18 +2811,26 @@ serve(async (req) => {
             if (!partData) return null;
             
             // Questions could be array of strings or array of objects
-            const questions = Array.isArray(partData.questions) 
-              ? partData.questions.map((q: any, qIndex: number) => ({
+            // CRITICAL FIX: Enforce Part 3 to have exactly 4 questions max (truncate legacy 5-question presets)
+            let rawQuestions = Array.isArray(partData.questions) ? partData.questions : [];
+            if (partNum === 3) {
+              rawQuestions = rawQuestions.slice(0, 4); // Enforce max 4 questions for Part 3
+            }
+            
+            const questions = rawQuestions.map((q: any, qIndex: number) => ({
                   id: crypto.randomUUID(),
                   question_number: qIndex + 1,
                   question_text: typeof q === 'string' ? q : (q.question_text || q),
                   sample_answer: typeof q === 'object' ? q.sample_answer : undefined,
-                }))
-              : [];
+                }));
             
-            // Sample answers could be separate array
-            if (Array.isArray(partData.sample_answers) && partData.sample_answers.length > 0) {
-              partData.sample_answers.forEach((answer: string, idx: number) => {
+            // Sample answers could be separate array (also enforce max 4 for Part 3)
+            let sampleAnswers = Array.isArray(partData.sample_answers) ? partData.sample_answers : [];
+            if (partNum === 3) {
+              sampleAnswers = sampleAnswers.slice(0, 4);
+            }
+            if (sampleAnswers.length > 0) {
+              sampleAnswers.forEach((answer: string, idx: number) => {
                 if (questions[idx]) {
                   questions[idx].sample_answer = answer;
                 }
@@ -2870,11 +2878,30 @@ serve(async (req) => {
           // IMPORTANT: ai_practice_tests.id is a UUID, so preset runs must also use a UUID testId (not "preset-...")
           const presetRunTestId = crypto.randomUUID();
           
+          // CRITICAL FIX: Filter out extra Part 3 audio URLs (legacy presets may have part3_q5)
+          let filteredAudioUrls = payload.audioUrls;
+          if (filteredAudioUrls && typeof filteredAudioUrls === 'object') {
+            const filtered: Record<string, string> = {};
+            for (const [key, url] of Object.entries(filteredAudioUrls)) {
+              // Exclude part3_q5, part3_q6, etc. - only allow part3_q1 through part3_q4
+              const part3Match = key.match(/^part3_q(\d+)$/);
+              if (part3Match) {
+                const qNum = parseInt(part3Match[1], 10);
+                if (qNum > 4) {
+                  console.log(`Filtering out legacy Part 3 audio: ${key}`);
+                  continue; // Skip part3_q5 and beyond
+                }
+              }
+              filtered[key] = url as string;
+            }
+            filteredAudioUrls = filtered;
+          }
+          
           const responsePayload = {
             testId: presetRunTestId,
             topic: preset.topic,
             speakingParts,
-            audioUrls: payload.audioUrls, // Pre-generated TTS audio URLs
+            audioUrls: filteredAudioUrls, // Pre-generated TTS audio URLs (filtered to max 4 Part 3 questions)
             isPreset: true,
             presetId: preset.id,
           };
