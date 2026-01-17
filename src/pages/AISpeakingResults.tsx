@@ -14,6 +14,7 @@ import { ModelAnswersAccordion } from '@/components/speaking/ModelAnswersAccordi
 import { useSpeakingEvaluationRealtime } from '@/hooks/useSpeakingEvaluationRealtime';
 import { AddToFlashcardButton } from '@/components/common/AddToFlashcardButton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { SpeakingResultsSkeleton, ProcessingCardSkeleton } from '@/components/speaking/SpeakingResultsSkeleton';
 import {
   Mic,
   RotateCcw,
@@ -31,8 +32,6 @@ import {
   AlertCircle,
   Lightbulb,
   Play,
-  Clock,
-  RefreshCw,
   Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -345,7 +344,7 @@ export default function AISpeakingResults() {
     isFailed,
     retryCount,
     lastError,
-    isSubscribed,
+    // isSubscribed - passed to ProcessingCardSkeleton internally
     progress,
     currentPart,
     totalParts,
@@ -512,18 +511,15 @@ export default function AISpeakingResults() {
     return 'bg-destructive/20 border-destructive/30';
   };
 
-  // Initial load: show neutral loading (prevents "Submission Received" flash when opening past results)
+  // Initial load: show skeleton loading (prevents "Submission Received" flash when opening past results)
   if (loading && !result) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
-        <main className="flex-1 flex items-center justify-center p-4">
-          <Card className="max-w-md w-full">
-            <CardContent className="py-8 text-center">
-              <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto mb-4" />
-              <p className="text-muted-foreground">Loading your speaking evaluation...</p>
-            </CardContent>
-          </Card>
+        <main className="flex-1 py-4 md:py-8">
+          <div className="container max-w-5xl mx-auto px-3 md:px-4">
+            <SpeakingResultsSkeleton />
+          </div>
         </main>
       </div>
     );
@@ -535,73 +531,15 @@ export default function AISpeakingResults() {
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
         <main className="flex-1 flex items-center justify-center p-4">
-          <Card className="max-w-md w-full">
-            <CardContent className="py-8 text-center">
-              <div className="relative mx-auto w-16 h-16 mb-6">
-                <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
-                <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin"></div>
-                <Mic className="absolute inset-0 m-auto w-6 h-6 text-primary" />
-              </div>
-              
-              <h2 className="text-xl font-bold mb-2">
-                {jobStatus === 'processing' ? 'Analyzing Your Speech…' : 'Submission Received'}
-              </h2>
-              
-              <p className="text-muted-foreground mb-4">
-                {jobStatus === 'processing'
-                  ? 'Your evaluation is being generated in the background. You can leave this page — we’ll notify you when it’s ready.'
-                  : 'Your recordings were submitted successfully. We’re starting the evaluation now.'}
-              </p>
-
-              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground mb-4">
-                <Clock className="w-4 h-4" />
-                <span>Usually 30–90 seconds</span>
-              </div>
-
-              {/* Progress indicator */}
-              {progress > 0 && (
-                <div className="mb-4">
-                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                    <span>Processing Part {currentPart}/{totalParts}</span>
-                    <span>{progress}%</span>
-                  </div>
-                  <Progress value={progress} className="h-2" />
-                </div>
-              )}
-
-              {retryCount > 0 && (
-                <div className="flex items-center justify-center gap-2 text-sm text-warning mb-2">
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Retry attempt {retryCount}...</span>
-                </div>
-              )}
-
-              {isSubscribed && (
-                <Badge variant="outline" className="mt-2">
-                  <span className="w-2 h-2 rounded-full bg-success animate-pulse mr-2"></span>
-                  Live updates enabled
-                </Badge>
-              )}
-
-              {/* Cancel button */}
-              {latestJobId && (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="mt-4"
-                  onClick={cancelJob}
-                  disabled={isCancelling}
-                >
-                  {isCancelling ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 mr-2" />
-                  )}
-                  Cancel Evaluation
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <ProcessingCardSkeleton
+            stage={jobStatus === 'processing' ? 'processing' : 'queued'}
+            progress={progress}
+            currentPart={currentPart}
+            totalParts={totalParts}
+            retryCount={retryCount}
+            onCancel={latestJobId ? cancelJob : undefined}
+            isCancelling={isCancelling}
+          />
         </main>
       </div>
     );

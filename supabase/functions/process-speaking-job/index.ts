@@ -673,7 +673,7 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
             model: modelName,
             generationConfig: { 
               temperature: 0.3, 
-              maxOutputTokens: 8000,
+              maxOutputTokens: 32000, // Increased from 8000 to handle long transcripts with modelAnswers
               responseMimeType: 'application/json', // Force JSON output
             },
           });
@@ -683,8 +683,18 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
 
           if (!text) {
             console.warn(`[processTextBasedEvaluation] Empty response from ${modelName}`);
-            break; // Move to next model
+            // Retry on empty response instead of immediately moving on
+            if (attempt < MAX_KEY_RETRIES - 1) {
+              const delay = exponentialBackoffWithJitter(attempt, 1000, 10000);
+              console.log(`[processTextBasedEvaluation] Empty response, retrying in ${Math.round(delay / 1000)}s...`);
+              await sleep(delay);
+              continue;
+            }
+            break; // Move to next model after all retries
           }
+
+          // Log response length for debugging
+          console.log(`[processTextBasedEvaluation] Response length: ${text.length} chars`);
 
           const parsed = parseJson(text);
           if (parsed) {
@@ -692,7 +702,19 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
             console.log(`[processTextBasedEvaluation] Success with ${modelName} on attempt ${attempt + 1}`);
             break;
           } else {
-            console.warn(`[processTextBasedEvaluation] Failed to parse JSON from ${modelName}`);
+            // Log first 500 chars to help debug truncation issues
+            console.warn(`[processTextBasedEvaluation] Failed to parse JSON from ${modelName}. First 500 chars: ${text.slice(0, 500)}`);
+            console.warn(`[processTextBasedEvaluation] Last 200 chars: ${text.slice(-200)}`);
+            
+            // If response looks truncated (doesn't end with } or ]), retry
+            const trimmed = text.trim();
+            const looksComplete = trimmed.endsWith('}') || trimmed.endsWith(']');
+            if (!looksComplete && attempt < MAX_KEY_RETRIES - 1) {
+              console.log(`[processTextBasedEvaluation] Response appears truncated, retrying...`);
+              const delay = exponentialBackoffWithJitter(attempt, 2000, 15000);
+              await sleep(delay);
+              continue;
+            }
             break; // Move to next model
           }
         } catch (err: any) {
@@ -1207,11 +1229,53 @@ REMINDER: There are exactly ${numQ} audio files. Return exactly ${numQ} modelAns
 }
 
 function parseJson(text: string): any {
+  // First try direct parse
   try { return JSON.parse(text); } catch {}
+  
+  // Try extracting from markdown code block
   const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (match) try { return JSON.parse(match[1].trim()); } catch {}
+  
+  // Try extracting the largest JSON object
   const objMatch = text.match(/\{[\s\S]*\}/);
-  if (objMatch) try { return JSON.parse(objMatch[0]); } catch {}
+  if (objMatch) {
+    try { return JSON.parse(objMatch[0]); } catch {}
+    
+    // If that fails, try to repair truncated JSON
+    let jsonStr = objMatch[0];
+    
+    // Count open/close braces to detect truncation
+    const openBraces = (jsonStr.match(/\{/g) || []).length;
+    const closeBraces = (jsonStr.match(/\}/g) || []).length;
+    const openBrackets = (jsonStr.match(/\[/g) || []).length;
+    const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+    
+    // Try to repair by adding missing closing characters
+    if (openBraces > closeBraces || openBrackets > closeBrackets) {
+      console.log(`[parseJson] Attempting JSON repair: braces ${openBraces}/${closeBraces}, brackets ${openBrackets}/${closeBrackets}`);
+      
+      // Remove incomplete trailing content (after last comma or colon)
+      jsonStr = jsonStr.replace(/,\s*"[^"]*"?\s*:?\s*[^,}\]]*$/, '');
+      jsonStr = jsonStr.replace(/,\s*$/, '');
+      
+      // Add missing brackets then braces
+      for (let i = 0; i < openBrackets - closeBrackets; i++) {
+        jsonStr += ']';
+      }
+      for (let i = 0; i < openBraces - closeBraces; i++) {
+        jsonStr += '}';
+      }
+      
+      try { 
+        const repaired = JSON.parse(jsonStr);
+        console.log(`[parseJson] Successfully repaired truncated JSON`);
+        return repaired;
+      } catch (repairErr) {
+        console.warn(`[parseJson] Repair attempt failed: ${repairErr}`);
+      }
+    }
+  }
+  
   return null;
 }
 
