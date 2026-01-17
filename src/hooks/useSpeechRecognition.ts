@@ -6,6 +6,11 @@
  * - Controlled self-restart via watchdog
  * - Transcript buffer survives restarts
  * - No dual-instance cycling
+ * 
+ * WORD LOSS PREVENTION:
+ * - Interim text is tracked and flushed on restarts and stops
+ * - Pre-restart capture ensures words during restart gap aren't lost
+ * - Grace period for late final results after stop()
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -25,9 +30,11 @@ const CHROME_MAX_SESSION_MS = 35000;
 // Edge max session - Edge has longer tolerance
 const EDGE_MAX_SESSION_MS = 45000;
 // Delay before restarting after stop
-const RESTART_DELAY_MS = 250;
+const RESTART_DELAY_MS = 200;
 // Watchdog check interval
 const WATCHDOG_INTERVAL_MS = 2000;
+// Grace period for late finals after stop
+const STOP_GRACE_PERIOD_MS = 200;
 
 // Browser detection
 const detectBrowser = () => {
@@ -58,14 +65,48 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
   // Watchdog timer
   const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
-  // Transcript buffer - survives restarts
-  const transcriptBufferRef = useRef('');
+  // CRITICAL: Append-only transcript storage (survives restarts)
+  const finalSegmentsRef = useRef<string[]>([]);
+  
+  // CRITICAL: Track latest interim text for flushing on restart/stop
+  const latestInterimRef = useRef('');
+  
+  // Duplicate prevention (only exact back-to-back)
+  const lastExactFinalRef = useRef('');
   
   // Browser info
   const browserRef = useRef(detectBrowser());
 
   // DEV ASSERTION: Ensure only one instance exists
   const instanceCountRef = useRef(0);
+
+  // Helper: Build full transcript from segments
+  const buildFullTranscript = useCallback(() => {
+    return finalSegmentsRef.current.join(' ');
+  }, []);
+
+  // Helper: Flush interim text to final segments (called before restart and on stop)
+  const flushInterimToFinal = useCallback(() => {
+    const interim = latestInterimRef.current?.trim();
+    if (!interim) return false;
+    
+    // Don't flush if it's exactly the same as last final (prevents duplicates)
+    if (interim === lastExactFinalRef.current) {
+      latestInterimRef.current = '';
+      return false;
+    }
+    
+    console.log('[SpeechRecognition] Flushing interim to final:', interim.substring(0, 50));
+    finalSegmentsRef.current.push(interim);
+    lastExactFinalRef.current = interim;
+    latestInterimRef.current = '';
+    
+    const fullTranscript = buildFullTranscript();
+    setTranscript(fullTranscript);
+    config.onResult?.(interim, true);
+    
+    return true;
+  }, [buildFullTranscript, config]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -103,7 +144,6 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
     recognition.onresult = (event) => {
       if (!isRecordingRef.current) return;
       
-      let finalText = '';
       let interimText = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -111,18 +151,39 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
         const text = result[0].transcript;
         
         if (result.isFinal) {
-          finalText += text + ' ';
-          config.onResult?.(text, true);
+          const trimmed = text.trim();
+          
+          // Clear interim since we got a final (final supersedes any buffered interim)
+          if (latestInterimRef.current) {
+            latestInterimRef.current = '';
+          }
+          
+          // ONLY skip if this is EXACTLY the same as the last final (back-to-back duplicate)
+          // This prevents the SAME recognition result from being processed twice
+          // But ALLOWS the user to intentionally repeat sentences
+          if (trimmed === lastExactFinalRef.current) {
+            console.log('[SpeechRecognition] Skipping exact back-to-back duplicate');
+            continue;
+          }
+          
+          if (trimmed.length > 0) {
+            lastExactFinalRef.current = trimmed;
+            finalSegmentsRef.current.push(trimmed);
+            
+            const fullTranscript = buildFullTranscript();
+            setTranscript(fullTranscript);
+            config.onResult?.(text, true);
+            
+            console.log('[SpeechRecognition] Final segment added:', trimmed.substring(0, 50));
+          }
         } else {
-          interimText += text;
+          interimText = text;
+          // CRITICAL: Track latest interim for flushing on restart/stop
+          latestInterimRef.current = text;
           config.onResult?.(text, false);
         }
       }
 
-      if (finalText) {
-        transcriptBufferRef.current += finalText;
-        setTranscript(transcriptBufferRef.current);
-      }
       setInterimTranscript(interimText);
     };
 
@@ -149,8 +210,14 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
       console.log('[SpeechRecognition] onend', {
         isRecording: isRecordingRef.current,
         isRestarting: isRestartingRef.current,
-        isManualStop: isManualStopRef.current
+        isManualStop: isManualStopRef.current,
+        segmentCount: finalSegmentsRef.current.length,
+        hasInterim: Boolean(latestInterimRef.current?.trim())
       });
+
+      // CRITICAL: Flush any interim text before doing anything else
+      // This prevents word loss during restarts
+      flushInterimToFinal();
 
       // If user stopped, don't restart
       if (!isRecordingRef.current || isManualStopRef.current) {
@@ -173,6 +240,8 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
           
           isRestartingRef.current = false;
           sessionStartRef.current = Date.now();
+          // Clear duplicate check for new session to prevent false positives
+          lastExactFinalRef.current = '';
           
           try {
             recognition.start();
@@ -197,6 +266,8 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
         
         isRestartingRef.current = false;
         sessionStartRef.current = Date.now();
+        // Clear duplicate check for new session
+        lastExactFinalRef.current = '';
         
         try {
           recognition.start();
@@ -208,7 +279,7 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
     };
 
     return recognition;
-  }, [config]);
+  }, [config, buildFullTranscript, flushInterimToFinal]);
 
   // Start listening
   const startListening = useCallback(() => {
@@ -227,8 +298,12 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
     isManualStopRef.current = false;
     isRecordingRef.current = true;
     isRestartingRef.current = false;
-    transcriptBufferRef.current = '';
     sessionStartRef.current = Date.now();
+    
+    // CRITICAL: Reset transcript storage
+    finalSegmentsRef.current = [];
+    latestInterimRef.current = '';
+    lastExactFinalRef.current = '';
     
     setTranscript('');
     setInterimTranscript('');
@@ -248,6 +323,9 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
         console.log(`[SpeechRecognition] Watchdog: Proactive restart after ${Math.round(elapsed / 1000)}s`);
         isRestartingRef.current = true;
         
+        // CRITICAL: Flush interim BEFORE stopping to prevent word loss
+        flushInterimToFinal();
+        
         try {
           recognitionRef.current?.stop();
         } catch {
@@ -263,11 +341,14 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
       console.error('[SpeechRecognition] Start error:', err);
       setError(err instanceof Error ? err : new Error('Failed to start'));
     }
-  }, [createRecognition]);
+  }, [createRecognition, flushInterimToFinal]);
 
   // Stop listening with grace period for late finals
   const stopListening = useCallback(() => {
-    console.log('[SpeechRecognition] Stopping...');
+    console.log('[SpeechRecognition] Stopping...', {
+      segmentCount: finalSegmentsRef.current.length,
+      hasInterim: Boolean(latestInterimRef.current?.trim())
+    });
     
     // Set manual stop flag to prevent restart, but keep recording flag true briefly
     isManualStopRef.current = true;
@@ -287,14 +368,24 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
       }
     }
     
-    // Give browser 150ms grace period for late final results
+    // Give browser grace period for late final results before final cleanup
+    // The onend handler will also flush, but this is a fallback
     setTimeout(() => {
       isRecordingRef.current = false;
+      
+      // Flush any remaining interim that wasn't converted to final
+      const flushed = flushInterimToFinal();
+      if (flushed) {
+        console.log('[SpeechRecognition] Flushed remaining interim on stop');
+      }
+      
+      setInterimTranscript('');
       setIsListening(false);
       instanceCountRef.current = 0;
-      console.log('[SpeechRecognition] Stopped');
-    }, 150);
-  }, []);
+      
+      console.log('[SpeechRecognition] Stopped with', finalSegmentsRef.current.length, 'segments');
+    }, STOP_GRACE_PERIOD_MS);
+  }, [flushInterimToFinal]);
 
   // Abort (immediate stop)
   const abort = useCallback(() => {
@@ -323,7 +414,9 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
 
   // Clear transcript
   const clearTranscript = useCallback(() => {
-    transcriptBufferRef.current = '';
+    finalSegmentsRef.current = [];
+    latestInterimRef.current = '';
+    lastExactFinalRef.current = '';
     setTranscript('');
     setInterimTranscript('');
   }, []);
@@ -333,7 +426,7 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
     isSupported,
     transcript,
     interimTranscript,
-    fullTranscript: transcript + interimTranscript,
+    fullTranscript: transcript + (interimTranscript ? ' ' + interimTranscript : ''),
     error,
     startListening,
     stopListening,
