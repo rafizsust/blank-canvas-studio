@@ -10,7 +10,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { ModelAnswersAccordion } from '@/components/speaking/ModelAnswersAccordion';
 import { useSpeakingEvaluationRealtime } from '@/hooks/useSpeakingEvaluationRealtime';
 import { AddToFlashcardButton } from '@/components/common/AddToFlashcardButton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -31,7 +30,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Lightbulb,
-  Play,
   Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -625,6 +623,29 @@ export default function AISpeakingResults() {
     { key: 'pronunciation', label: 'Pronunciation', data: report.pronunciation },
   ];
 
+  // Helper function to get transcript for a segment key
+  const getTranscriptForKey = (key: string): string => {
+    // Priority 1: Check modelAnswers for candidateResponse
+    const modelAnswer = report.modelAnswers?.find(m => m.segment_key?.toLowerCase() === key.toLowerCase());
+    if (modelAnswer?.candidateResponse) return modelAnswer.candidateResponse;
+    
+    // Priority 2: Check transcripts_by_question
+    const tbq = result.candidate_transcripts.by_question;
+    if (tbq) {
+      for (const entries of Object.values(tbq)) {
+        if (Array.isArray(entries)) {
+          for (const entry of entries) {
+            if (entry.segment_key?.toLowerCase() === key.toLowerCase()) {
+              return entry.transcript;
+            }
+          }
+        }
+      }
+    }
+    
+    return '';
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Navbar />
@@ -681,106 +702,165 @@ export default function AISpeakingResults() {
             </div>
           </Card>
 
-          <Tabs defaultValue="criteria" className="mb-6">
-            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-6 h-auto p-1">
-              <TabsTrigger value="criteria" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Criteria</TabsTrigger>
-              <TabsTrigger value="transcript" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Transcript</TabsTrigger>
-              <TabsTrigger value="model" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Model</TabsTrigger>
+          {/* MERGED TABS: Feedback, Review, Lexical, Parts */}
+          <Tabs defaultValue="feedback" className="mb-6">
+            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-4 h-auto p-1">
+              <TabsTrigger value="feedback" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Feedback</TabsTrigger>
+              <TabsTrigger value="review" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Review</TabsTrigger>
               <TabsTrigger value="lexical" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Lexical</TabsTrigger>
               <TabsTrigger value="parts" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Parts</TabsTrigger>
-              <TabsTrigger value="improve" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Improve</TabsTrigger>
             </TabsList>
 
-            {/* Criteria Breakdown */}
-            <TabsContent value="criteria" className="mt-4 md:mt-6 space-y-3 md:space-y-4">
-              {criteria.map(({ key, label, data }) => (
-                <Card key={key}>
-                  <CardHeader className="pb-2 md:pb-3 p-3 md:p-6">
-                    <div className="flex items-center justify-between gap-2">
-                      <CardTitle className="text-sm md:text-lg">{label}</CardTitle>
-                      <Badge className={cn("text-sm md:text-lg font-bold px-2 md:px-3", getBandBg(data?.score || 0))}>
-                        {data?.score?.toFixed(1) || 'N/A'}
-                      </Badge>
-                    </div>
-                    <Progress 
-                      value={(data?.score || 0) / 9 * 100} 
-                      className="h-1.5 md:h-2 mt-2"
-                    />
+            {/* FEEDBACK TAB: Merged Criteria + Improve */}
+            <TabsContent value="feedback" className="mt-4 md:mt-6 space-y-6">
+              {/* Criteria Cards */}
+              <div className="space-y-3 md:space-y-4">
+                {criteria.map(({ key, label, data }) => (
+                  <Card key={key}>
+                    <CardHeader className="pb-2 md:pb-3 p-3 md:p-6">
+                      <div className="flex items-center justify-between gap-2">
+                        <CardTitle className="text-sm md:text-lg">{label}</CardTitle>
+                        <Badge className={cn("text-sm md:text-lg font-bold px-2 md:px-3", getBandBg(data?.score || 0))}>
+                          {data?.score?.toFixed(1) || 'N/A'}
+                        </Badge>
+                      </div>
+                      <Progress 
+                        value={(data?.score || 0) / 9 * 100} 
+                        className="h-1.5 md:h-2 mt-2"
+                      />
+                    </CardHeader>
+                    <CardContent className="space-y-3 md:space-y-4 p-3 md:p-6 pt-0 md:pt-0">
+                      {/* Strengths */}
+                      {data?.strengths && data.strengths.length > 0 && (
+                        <div>
+                          <div className="flex items-center gap-2 text-success mb-1.5 md:mb-2">
+                            <CheckCircle2 className="w-3 h-3 md:w-4 md:h-4" />
+                            <span className="font-medium text-xs md:text-sm">Strengths</span>
+                          </div>
+                          <ul className="space-y-1 pl-4 md:pl-6">
+                            {data.strengths.map((s, i) => (
+                              <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      {/* Weaknesses */}
+                      {data?.weaknesses && data.weaknesses.length > 0 && (
+                        <div>
+                          <div className="flex items-center gap-2 text-destructive mb-1.5 md:mb-2">
+                            <AlertCircle className="w-3 h-3 md:w-4 md:h-4" />
+                            <span className="font-medium text-xs md:text-sm">Areas to Improve</span>
+                          </div>
+                          <ul className="space-y-1 pl-4 md:pl-6">
+                            {data.weaknesses.map((w, i) => (
+                              <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{w}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      {/* Suggestions */}
+                      {data?.suggestions && data.suggestions.length > 0 && (
+                        <div>
+                          <div className="flex items-center gap-2 text-primary mb-1.5 md:mb-2">
+                            <Lightbulb className="w-3 h-3 md:w-4 md:h-4" />
+                            <span className="font-medium text-xs md:text-sm">Suggestions</span>
+                          </div>
+                          <ul className="space-y-1 pl-4 md:pl-6">
+                            {data.suggestions.map((s, i) => (
+                              <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Improvement Priorities Section */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-warning" />
+                    Improvement Priorities
+                  </CardTitle>
+                  <CardDescription>Focus on these areas to boost your band score</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {report.improvement_priorities && report.improvement_priorities.length > 0 ? (
+                    <ol className="space-y-3">
+                      {report.improvement_priorities.map((priority, i) => (
+                        <li key={i} className="flex items-start gap-3">
+                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-warning/20 text-warning text-sm font-bold flex items-center justify-center">
+                            {i + 1}
+                          </span>
+                          <span className="text-sm">{priority}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-muted-foreground">No specific improvement priorities identified.</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Strengths to Maintain */}
+              {report.strengths_to_maintain && report.strengths_to_maintain.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-success" />
+                      Strengths to Maintain
+                    </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3 md:space-y-4 p-3 md:p-6 pt-0 md:pt-0">
-                    {/* Strengths */}
-                    {data?.strengths && data.strengths.length > 0 && (
-                      <div>
-                        <div className="flex items-center gap-2 text-success mb-1.5 md:mb-2">
-                          <CheckCircle2 className="w-3 h-3 md:w-4 md:h-4" />
-                          <span className="font-medium text-xs md:text-sm">Strengths</span>
-                        </div>
-                        <ul className="space-y-1 pl-4 md:pl-6">
-                          {data.strengths.map((s, i) => (
-                            <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{s}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    
-                    {/* Weaknesses */}
-                    {data?.weaknesses && data.weaknesses.length > 0 && (
-                      <div>
-                        <div className="flex items-center gap-2 text-destructive mb-1.5 md:mb-2">
-                          <AlertCircle className="w-3 h-3 md:w-4 md:h-4" />
-                          <span className="font-medium text-xs md:text-sm">Areas to Improve</span>
-                        </div>
-                        <ul className="space-y-1 pl-4 md:pl-6">
-                          {data.weaknesses.map((w, i) => (
-                            <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{w}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    
-                    {/* Suggestions */}
-                    {data?.suggestions && data.suggestions.length > 0 && (
-                      <div>
-                        <div className="flex items-center gap-2 text-primary mb-1.5 md:mb-2">
-                          <Lightbulb className="w-3 h-3 md:w-4 md:h-4" />
-                          <span className="font-medium text-xs md:text-sm">Suggestions</span>
-                        </div>
-                        <ul className="space-y-1 pl-4 md:pl-6">
-                          {data.suggestions.map((s, i) => (
-                            <li key={i} className="text-xs md:text-sm text-muted-foreground list-disc">{s}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                  <CardContent>
+                    <ul className="space-y-2">
+                      {report.strengths_to_maintain.map((strength, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm">
+                          <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
+                          <span>{strength}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </CardContent>
                 </Card>
-              ))}
+              )}
+
+              {/* Examiner Notes */}
+              {report.examiner_notes && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5 text-primary" />
+                      Examiner Notes
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm italic text-muted-foreground">
+                      "{report.examiner_notes}"
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
-            {/* Model Answers */}
-            <TabsContent value="model" className="mt-4 md:mt-6">
-              <ModelAnswersAccordion 
-                modelAnswers={report.modelAnswers || []} 
-                userBandScore={report.overall_band}
-              />
-            </TabsContent>
-
-
-            {/* Candidate Transcript with Audio Playback */}
-            <TabsContent value="transcript" className="mt-6">
+            {/* REVIEW TAB: Merged Transcript + Model (Your Response + Better Version) */}
+            <TabsContent value="review" className="mt-4 md:mt-6">
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <MessageSquare className="w-5 h-5 text-primary" />
-                    Your Transcript
+                    Your Responses & Model Answers
                   </CardTitle>
                   <CardDescription>
-                    What the app captured from your speech. Listen to your recordings and read the transcript.
+                    Listen to your recordings and compare with better versions
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {(() => {
-                    // Build a unified list of all questions with audio and transcripts
+                    // Build a unified list of all questions with audio, transcripts, and model answers
                     const allAudioUrls = Object.entries(result.audio_urls);
                     const modelAnswers = report.modelAnswers || [];
                     
@@ -791,7 +871,7 @@ export default function AISpeakingResults() {
                       questionNumber: number;
                       questionText: string;
                       transcript: string;
-                      estimatedBand?: number;
+                      modelAnswer?: ModelAnswer;
                     }>> = new Map();
 
                     // Parse audio URLs to determine part numbers and match with transcripts/model answers
@@ -803,35 +883,15 @@ export default function AISpeakingResults() {
                       // Case-insensitive: Find model answer where segment_key matches the audio key
                       const matchingModel = modelAnswers.find(m => m.segment_key?.toLowerCase() === key.toLowerCase());
 
-                      // Initialize with model answer data if found
-                      let transcript = matchingModel?.candidateResponse || '';
+                      // Get transcript using helper function
+                      let transcript = getTranscriptForKey(key);
                       let questionText = matchingModel?.question || '';
                       let questionNumber = matchingModel?.questionNumber || 0;
-                      let estimatedBand = matchingModel?.estimatedBand;
-
-                      // STRICT MATCHING: Check transcripts_by_question for segment_key match (case-insensitive)
-                      const tbq = result.candidate_transcripts.by_question;
-                      if (tbq) {
-                        for (const [, entries] of Object.entries(tbq)) {
-                          if (Array.isArray(entries)) {
-                            for (const entry of entries) {
-                              // Case-insensitive match on segment_key
-                              if (entry.segment_key?.toLowerCase() === key.toLowerCase()) {
-                                transcript = transcript || entry.transcript;
-                                questionText = questionText || entry.question_text || '';
-                                questionNumber = questionNumber || entry.question_number;
-                              }
-                            }
-                          }
-                        }
-                      }
-
-                      // No fallback to confidence_transcripts - removed
 
                       // Fallback: extract question number from key pattern if not found
                       if (!questionNumber) {
                         const qMatch = key.match(/q(\d+)/);
-                        questionNumber = qMatch ? Number(qMatch[1]) : questionsByPart.get(partNum)?.length || 0 + 1;
+                        questionNumber = qMatch ? Number(qMatch[1]) : (questionsByPart.get(partNum)?.length || 0) + 1;
                       }
 
                       if (!questionsByPart.has(partNum)) {
@@ -844,7 +904,7 @@ export default function AISpeakingResults() {
                         questionNumber,
                         questionText: questionText || `Question ${questionNumber}`,
                         transcript,
-                        estimatedBand,
+                        modelAnswer: matchingModel,
                       });
                     });
 
@@ -871,40 +931,43 @@ export default function AISpeakingResults() {
                         <div key={partNum} className="border rounded-lg p-4 space-y-4">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">Part {partNum}</Badge>
-                            <Badge variant="secondary" className="text-xs flex items-center gap-1">
-                              <Volume2 className="w-3 h-3" />
-                              {questions.length} recording{questions.length > 1 ? 's' : ''}
-                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {partNum === 1 ? 'Introduction & Interview' : 
+                               partNum === 2 ? 'Individual Long Turn' : 'Two-way Discussion'}
+                            </span>
                           </div>
-
-                          <div className="space-y-4">
+                          
+                          <div className="space-y-6">
                             {questions.map((q) => (
-                              <div key={q.key} className="space-y-2 pb-3 border-b last:border-b-0 last:pb-0">
-                                <div className="flex items-center gap-2">
-                                  <p className="text-sm font-medium flex-1">
-                                    Q{q.questionNumber}: {q.questionText}
-                                  </p>
-                                  {q.estimatedBand && (
-                                    <Badge variant="outline" className="text-xs">
-                                      ~Band {q.estimatedBand.toFixed(1)}
-                                    </Badge>
-                                  )}
+                              <div key={q.key} className="space-y-4 border-b pb-4 last:border-b-0 last:pb-0">
+                                {/* Question */}
+                                <div className="flex items-start gap-2">
+                                  <Badge variant="secondary" className="text-xs shrink-0">
+                                    Q{q.questionNumber}
+                                  </Badge>
+                                  <p className="text-sm font-medium">{q.questionText}</p>
                                 </div>
                                 
-                                <div className="bg-muted/50 rounded-lg p-2">
-                                  <audio
-                                    controls
+                                {/* Audio Player */}
+                                <div>
+                                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                                    <Volume2 className="w-3 h-3" />
+                                    Your Recording
+                                  </p>
+                                  <audio 
+                                    controls 
+                                    className="w-full h-8 [&::-webkit-media-controls-panel]:h-8"
                                     src={q.audioUrl}
-                                    className="w-full h-10"
-                                    preload="auto"
+                                    preload="metadata"
                                     crossOrigin="anonymous"
                                   >
                                     Your browser does not support audio playback.
                                   </audio>
                                 </div>
                                 
+                                {/* Transcript */}
                                 <div className="pl-3 border-l-2 border-muted">
-                                  <p className="text-xs text-muted-foreground mb-1">Transcript:</p>
+                                  <p className="text-xs text-muted-foreground mb-1">Your Transcript:</p>
                                   <p className="text-sm text-muted-foreground whitespace-pre-line">
                                     {q.transcript || (
                                       <span className="italic text-muted-foreground/70">
@@ -913,6 +976,19 @@ export default function AISpeakingResults() {
                                     )}
                                   </p>
                                 </div>
+                                
+                                {/* Better Version (Model Answer) */}
+                                {q.modelAnswer?.modelAnswer && (
+                                  <div className="pl-3 border-l-2 border-primary bg-primary/5 rounded-r-lg p-3">
+                                    <p className="text-xs text-primary font-medium mb-1 flex items-center gap-1">
+                                      <Sparkles className="w-3 h-3" />
+                                      Better Version
+                                    </p>
+                                    <p className="text-sm">
+                                      {q.modelAnswer.modelAnswer}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -921,7 +997,7 @@ export default function AISpeakingResults() {
                     });
                   })()}
                   
-                  {/* Info note about transcript availability */}
+                  {/* Info note */}
                   <p className="text-xs text-muted-foreground text-center pt-2 border-t">
                     💡 Transcripts are generated by AI. If a transcript is missing, you can still listen to your recording.
                   </p>
@@ -1158,79 +1234,7 @@ export default function AISpeakingResults() {
               ) : (
                 <Card>
                   <CardContent className="py-8 text-center">
-                    <p className="text-muted-foreground">Part analysis not available for this test. Check the Criteria tab for detailed feedback.</p>
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-
-            {/* Improvement Priorities */}
-            <TabsContent value="improve" className="mt-6 space-y-4">
-              {/* Priorities */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-warning" />
-                    Improvement Priorities
-                  </CardTitle>
-                  <CardDescription>Focus on these areas to boost your band score</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {report.improvement_priorities && report.improvement_priorities.length > 0 ? (
-                    <ol className="space-y-3">
-                      {report.improvement_priorities.map((priority, i) => (
-                        <li key={i} className="flex items-start gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-warning/20 text-warning text-sm font-bold flex items-center justify-center">
-                            {i + 1}
-                          </span>
-                          <span className="text-sm">{priority}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="text-muted-foreground">No specific improvement priorities identified.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Strengths to Maintain */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-success" />
-                    Strengths to Maintain
-                  </CardTitle>
-                  <CardDescription>Keep doing these well!</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {report.strengths_to_maintain && report.strengths_to_maintain.length > 0 ? (
-                    <ul className="space-y-2">
-                      {report.strengths_to_maintain.map((strength, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
-                          <span>{strength}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-muted-foreground">Keep practicing to develop more strengths!</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Examiner Notes */}
-              {report.examiner_notes && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <MessageSquare className="w-5 h-5 text-primary" />
-                      Examiner Notes
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm italic text-muted-foreground">
-                      "{report.examiner_notes}"
-                    </p>
+                    <p className="text-muted-foreground">Part analysis not available for this test. Check the Feedback tab for detailed feedback.</p>
                   </CardContent>
                 </Card>
               )}
@@ -1239,35 +1243,16 @@ export default function AISpeakingResults() {
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3 md:gap-4 justify-center mt-6 md:mt-8 px-2 md:px-0">
-            <Button variant="outline" asChild className="w-full sm:w-auto">
+            <Button asChild variant="outline" className="w-full sm:w-auto">
               <Link to="/ai-practice">
                 <Home className="w-4 h-4 mr-2" />
-                Back to AI Practice
+                Back to Practice
               </Link>
             </Button>
-            {report.modelAnswers && report.modelAnswers.length > 0 && (
-              <Button 
-                variant="secondary"
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  // Store practice data for re-attempt
-                  const practiceData = {
-                    testId: result.test_id,
-                    modelAnswers: report.modelAnswers,
-                    topic: report.examiner_notes || 'Speaking Practice'
-                  };
-                  sessionStorage.setItem('speaking_practice_mode', JSON.stringify(practiceData));
-                  navigate(`/ai-practice/speaking/${result.test_id}?mode=practice`);
-                }}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Practice These Questions
-              </Button>
-            )}
             <Button asChild className="w-full sm:w-auto">
-              <Link to="/ai-practice">
-                <RotateCcw className="w-4 h-4 mr-2" />
-                New Test
+              <Link to="/ai-practice/speaking/config">
+                <Mic className="w-4 h-4 mr-2" />
+                Try Another Test
               </Link>
             </Button>
           </div>
