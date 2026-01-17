@@ -196,6 +196,10 @@ export default function AIPracticeSpeakingTest() {
     },
   });
 
+  // Track any in-flight transcript finalization promises per segment key.
+  // This lets us *not* block UI navigation, but still guarantee we await full transcripts before submit.
+  const pendingTranscriptFinalizationsRef = useRef<Record<string, Promise<void>>>({});
+
   // Persist segment analyses to sessionStorage for crash recovery
   const SEGMENT_ANALYSES_KEY = `speaking_analyses_${testId}`;
   
@@ -542,33 +546,35 @@ export default function AIPracticeSpeakingTest() {
       return;
     }
 
-    // Stop speech analysis and capture results
+    // Stop speech analysis and capture results (async finalization for Chrome late finals)
     if (speechAnalysis.isAnalyzing) {
-      const analysis = speechAnalysis.stop();
-      
-      // CRITICAL FIX: Don't discard audio if speech analysis fails
-      // MediaRecorder may have captured valid audio even if speech recognition didn't work
-      // Only warn the user but keep the recording
-      if (!analysis) {
-        console.warn(`[SpeakingTest] Speech analysis returned null for ${key} - keeping audio anyway`);
-        // Still show warning but don't block submission
-        toast({
-          title: 'Speech Recognition Issue',
-          description: 'Speech analysis unavailable, but your audio was recorded. You can still submit.',
-          variant: 'default',
-        });
-      } else if (key) {
+      const finalize = speechAnalysis.stopAsync().then((analysis) => {
+        // CRITICAL: Don't discard audio if speech analysis fails
+        if (!analysis) {
+          console.warn(`[SpeakingTest] Speech analysis returned null for ${key} - keeping audio anyway`);
+          toast({
+            title: 'Speech Recognition Issue',
+            description: 'Speech analysis unavailable, but your audio was recorded. You can still submit.',
+            variant: 'default',
+          });
+          return;
+        }
+
         console.log(`[SpeakingTest] Speech analysis for ${key}:`, {
           rawTranscript: analysis.rawTranscript.slice(0, 100),
           durationMs: analysis.durationMs,
         });
 
-        // IMPORTANT: Persist analysis immediately so submission always includes transcripts
-        setSegmentAnalyses(prev => ({
+        // Persist analysis immediately so submission always includes transcripts
+        setSegmentAnalyses((prev) => ({
           ...prev,
           [key]: analysis,
         }));
-      }
+      }).finally(() => {
+        delete pendingTranscriptFinalizationsRef.current[key];
+      });
+
+      pendingTranscriptFinalizationsRef.current[key] = finalize;
     }
 
     // Save after MediaRecorder flushes the final dataavailable event.
@@ -1007,6 +1013,16 @@ export default function AIPracticeSpeakingTest() {
     setSubmissionProgress({ step: 'Preparing', detail: 'Getting ready to process your recordings...', currentItem: 0, totalItems: 0 });
 
     try {
+      // Ensure all transcript finalizations (Chrome late-final results) are flushed before submission.
+      // This prevents the last sentences being cropped in text-based evaluation.
+      const pendingFinalizers = Object.values(pendingTranscriptFinalizationsRef.current);
+      if (pendingFinalizers.length > 0) {
+        await Promise.race([
+          Promise.allSettled(pendingFinalizers),
+          new Promise((resolve) => window.setTimeout(resolve, 2000)),
+        ]);
+      }
+
       const segments = audioSegmentsRef.current;
       const keys = Object.keys(segments);
 

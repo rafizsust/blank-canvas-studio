@@ -122,6 +122,16 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
   // Timing
   const sessionStartRef = useRef(0);
 
+  /**
+   * Stop/finalization coordination
+   * Chrome can emit a last "final" result AFTER stop() is called.
+   * We must keep processing events until onend fires (or a timeout).
+   */
+  const isStoppingRef = useRef(false);
+  const stopResolveRef = useRef<((result: SpeechAnalysisResult | null) => void) | null>(null);
+  const stopTimeoutRef = useRef<number | null>(null);
+  const lastFinalizedResultRef = useRef<SpeechAnalysisResult | null>(null);
+
   // CRITICAL: Use refs to always have the latest handler functions
   // This prevents stale closure bugs where old handlers are attached to recognition
   const handleEndRef = useRef<() => void>(() => {});
@@ -271,15 +281,53 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
       isAnalyzing: isAnalyzingRef.current,
       isManualStop: isManualStopRef.current,
       isRestarting: isRestartingRef.current,
+      isStopping: isStoppingRef.current,
       segmentCount: finalSegmentsRef.current.length,
       hasInterimToFlush: Boolean(latestInterimRef.current?.trim()),
     });
 
-    // CRITICAL: Flush any pending interim text BEFORE checking restart conditions
-    // This prevents word loss at segment boundaries
+    // Always flush pending interim text at boundaries
     flushInterimToFinalRef.current();
 
-    if (!isAnalyzingRef.current || isManualStopRef.current) return;
+    // If we are stopping (manual stop), finalize *after* onend so we capture late final results.
+    if (isManualStopRef.current || isStoppingRef.current) {
+      if (stopTimeoutRef.current) {
+        window.clearTimeout(stopTimeoutRef.current);
+        stopTimeoutRef.current = null;
+      }
+
+      const rawTranscript = finalSegmentsRef.current.join(' ').trim();
+      const durationMs = Math.max(0, Date.now() - startTimeRef.current);
+
+      let result: SpeechAnalysisResult | null = null;
+      if (rawTranscript && rawTranscript.length >= 3) {
+        let browserMode: SpeechAnalysisResult['browserMode'] = 'other';
+        if (browser.isEdge) browserMode = 'edge-natural';
+        else if (browser.isChrome) browserMode = 'chrome-accent';
+
+        result = { rawTranscript, durationMs, browserMode };
+      } else {
+        console.warn('[SpeechAnalysis] No meaningful speech detected (finalize onend)');
+      }
+
+      lastFinalizedResultRef.current = result;
+
+      // Transition to idle only AFTER finalization.
+      setIsAnalyzing(false);
+      isAnalyzingRef.current = false;
+      isStoppingRef.current = false;
+
+      // Ensure we do not keep a dangling instance
+      recognitionRef.current = null;
+
+      const resolve = stopResolveRef.current;
+      stopResolveRef.current = null;
+      resolve?.(result);
+      return;
+    }
+
+    // Normal end (not manual stop): attempt restart
+    if (!isAnalyzingRef.current) return;
 
     const delay = browser.isEdge ? EDGE_LATE_RESULT_DELAY_MS : RESTART_DELAY_MS;
 
@@ -422,66 +470,108 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     return true;
   }, [createRecognitionInstance, setupRecognitionHandlers, startWatchdog]);
 
-  const stop = useCallback((): SpeechAnalysisResult | null => {
+  /**
+   * Stop and finalize the transcript.
+   * IMPORTANT: This must be async because Chrome may emit the last final results AFTER stop().
+   */
+  const stopAsync = useCallback(async (): Promise<SpeechAnalysisResult | null> => {
     const browser = browserRef.current;
 
-    console.log('[SpeechAnalysis] Stopping...', {
+    // If already finalized, return last known result.
+    if (!isAnalyzingRef.current && !isAnalyzing && lastFinalizedResultRef.current) {
+      return lastFinalizedResultRef.current;
+    }
+
+    console.log('[SpeechAnalysis] Stopping (async)...', {
       segmentCount: finalSegmentsRef.current.length,
+      browser: browser.browserName,
     });
 
     // Prevent any restart paths
     isManualStopRef.current = true;
     isRestartingRef.current = false;
+    isStoppingRef.current = true;
 
-    setIsAnalyzing(false);
-    isAnalyzingRef.current = false;
-
-    // Stop watchdog
+    // Stop watchdog immediately
     stopWatchdog();
 
-    // Release wake lock
+    // Release wake lock immediately (doesn't affect recognition results)
     if (wakeLockRef.current) {
       wakeLockRef.current.release().catch(() => {});
       wakeLockRef.current = null;
       console.log('[SpeechAnalysis] Wake lock released');
     }
 
-    // Stop recognition instance
+    // Best-effort flush before stop (helps if no further onresult events arrive)
+    flushInterimToFinalRef.current();
+
+    // Build a promise that resolves when onend fires (or a timeout fallback)
+    const finalizePromise = new Promise<SpeechAnalysisResult | null>((resolve) => {
+      stopResolveRef.current = resolve;
+
+      // Browser-dependent timeout: Chrome can be a bit slower delivering late finals
+      const timeoutMs = browser.isChrome ? 1400 : 800;
+      stopTimeoutRef.current = window.setTimeout(() => {
+        console.warn('[SpeechAnalysis] stopAsync timeout - finalizing best-effort');
+
+        // Ensure any interim is captured
+        flushInterimToFinalRef.current();
+
+        const rawTranscript = finalSegmentsRef.current.join(' ').trim();
+        const durationMs = Math.max(0, Date.now() - startTimeRef.current);
+
+        let result: SpeechAnalysisResult | null = null;
+        if (rawTranscript && rawTranscript.length >= 3) {
+          let browserMode: SpeechAnalysisResult['browserMode'] = 'other';
+          if (browser.isEdge) browserMode = 'edge-natural';
+          else if (browser.isChrome) browserMode = 'chrome-accent';
+
+          result = { rawTranscript, durationMs, browserMode };
+        }
+
+        lastFinalizedResultRef.current = result;
+
+        setIsAnalyzing(false);
+        isAnalyzingRef.current = false;
+        isStoppingRef.current = false;
+
+        recognitionRef.current = null;
+
+        const r = stopResolveRef.current;
+        stopResolveRef.current = null;
+        stopTimeoutRef.current = null;
+        r?.(result);
+      }, timeoutMs);
+    });
+
+    // Trigger native stop to cause the final onresult + onend
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch {
-        // Already stopped
+        // ignore
       }
-      recognitionRef.current = null;
     }
 
-    // Build final transcript from all segments
-    const rawTranscript = finalSegmentsRef.current.join(' ').trim();
-    
-    console.log('[SpeechAnalysis] Final transcript:', rawTranscript.substring(0, 100));
+    const result = await finalizePromise;
 
-    // Check if we got any speech
-    if (!rawTranscript || rawTranscript.length < 3) {
-      console.warn('[SpeechAnalysis] No meaningful speech detected');
-      return null;
-    }
+    // Cleanup instance
+    recognitionRef.current = null;
 
-    const durationMs = Date.now() - startTimeRef.current;
+    console.log('[SpeechAnalysis] Stop finalized:', result?.rawTranscript?.substring(0, 100) || '(empty)');
 
-    // Determine browser mode
-    let browserMode: SpeechAnalysisResult['browserMode'] = 'other';
-    if (browser.isEdge) browserMode = 'edge-natural';
-    else if (browser.isChrome) browserMode = 'chrome-accent';
+    return result;
+  }, [isAnalyzing, stopWatchdog]);
 
-    console.log(`[SpeechAnalysis] Complete. Duration: ${durationMs}ms`);
-
-    return {
-      rawTranscript,
-      durationMs,
-      browserMode,
-    };
-  }, [stopWatchdog]);
+  /**
+   * Synchronous stop kept for backwards compatibility.
+   * Prefer stopAsync() to avoid missing Chrome's late final results.
+   */
+  const stop = useCallback((): SpeechAnalysisResult | null => {
+    // Fire-and-forget finalize; callers wanting correctness must await stopAsync.
+    void stopAsync();
+    return lastFinalizedResultRef.current;
+  }, [stopAsync]);
 
   const abort = useCallback(() => {
     console.log('[SpeechAnalysis] Aborting...');
@@ -517,6 +607,7 @@ export function useAdvancedSpeechAnalysis(options: UseAdvancedSpeechAnalysisOpti
     interimTranscript,
     start,
     stop,
+    stopAsync,
     abort,
   };
 }
