@@ -58,6 +58,8 @@ export function useSpeakingEvaluationRealtime({
   const lastLoggedStatusRef = useRef<EvaluationJob['status'] | null>(null);
   const kickStartedRef = useRef(false);
   const kickTimerRef = useRef<number | null>(null);
+  const initialStatusRef = useRef<EvaluationJob['status'] | null>(null); // Track initial status to suppress toast for pre-completed jobs
+  const mountedAtRef = useRef<number>(Date.now());
 
   // Keep callbacks stable so realtime subscription doesn't resubscribe every render
   const onCompleteRef = useRef(onComplete);
@@ -97,6 +99,12 @@ export function useSpeakingEvaluationRealtime({
         return;
       }
 
+      // Track initial status on first update to detect pre-completed jobs
+      if (initialStatusRef.current === null) {
+        initialStatusRef.current = job.status;
+        console.log('[SpeakingEvaluationRealtime] Initial status captured:', job.status);
+      }
+
       if (lastLoggedStatusRef.current !== job.status) {
         console.log('[SpeakingEvaluationRealtime] Job update:', job.status, job.stage, job.id);
         lastLoggedStatusRef.current = job.status;
@@ -114,10 +122,20 @@ export function useSpeakingEvaluationRealtime({
 
       if (job.status === 'completed' && job.result_id && !hasCompletedRef.current) {
         hasCompletedRef.current = true;
-        toastRef.current({
-          title: 'Evaluation Complete!',
-          description: 'Your speaking test results are ready.',
-        });
+        
+        // Only show toast if job was NOT already completed when we started watching
+        // This prevents the flicker when viewing already-completed results
+        const wasAlreadyCompleted = initialStatusRef.current === 'completed';
+        const jobCompletedRecently = job.completed_at && (Date.now() - new Date(job.completed_at).getTime()) < 30000; // Within 30 seconds
+        
+        if (!wasAlreadyCompleted || jobCompletedRecently) {
+          toastRef.current({
+            title: 'Evaluation Complete!',
+            description: 'Your speaking test results are ready.',
+          });
+        } else {
+          console.log('[SpeakingEvaluationRealtime] Suppressing toast for pre-completed job');
+        }
 
         onCompleteRef.current?.(job.result_id);
 
@@ -327,6 +345,8 @@ export function useSpeakingEvaluationRealtime({
     if (!testId) return;
 
     hasCompletedRef.current = false;
+    initialStatusRef.current = null; // Reset initial status tracking
+    mountedAtRef.current = Date.now();
     pollJobStatus();
 
     return () => {

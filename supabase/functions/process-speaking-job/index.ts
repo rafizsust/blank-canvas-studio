@@ -847,7 +847,7 @@ function buildTextPrompt(
 ### SEGMENT_${idx}: ${seg.key.toUpperCase()}
 Part ${seg.partNum} | Question ${seg.questionNumber}: "${seg.questionText}"
 Transcript: "${seg.transcript}"
-Duration: ${seg.duration}s | WPM: ${seg.wpm}
+Speaking Rate: ${seg.wpm > 0 ? `${seg.wpm} words per minute` : 'Normal pace'}
 Fillers: ${seg.fillers} | Pauses: ${seg.pauses}
 Clarity: ${seg.clarity}% | Pitch Variation: ${seg.pitch.toFixed(0)}%`).join('\n');
 
@@ -975,7 +975,23 @@ REQUIRED JSON OUTPUT FORMAT
   },
   "summary": "Examiner's overall assessment summary (2-3 sentences)",
   "examiner_notes": "Professional observation on candidate's key areas for development",
-  "lexical_upgrades": [{"original": "word used", "upgraded": "band 8+ alternative", "context": "usage example"}],
+  "vocabulary_upgrades": [
+    {
+      "type": "vocabulary",
+      "original": "phrase candidate used correctly",
+      "upgraded": "higher band alternative",
+      "context": "verbatim substring from transcript showing usage"
+    }
+  ],
+  "recognition_corrections": [
+    {
+      "type": "correction",
+      "captured": "what speech recognition heard",
+      "intended": "what candidate actually said",
+      "context": "corrected phrase in full sentence"
+    }
+  ],
+  "lexical_upgrades": [{"original": "word used", "upgraded": "target band alternative", "context": "usage example"}],
   "improvement_priorities": ["Priority 1...", "Priority 2..."],
   "strengths_to_maintain": ["Strength 1...", "Strength 2..."],
   "part_analysis": [
@@ -1004,7 +1020,8 @@ REQUIRED JSON OUTPUT FORMAT
       "question": "Question text",
       "candidateResponse": "Corrected transcript (speech recognition errors fixed)",
       "estimatedBand": 5.5,
-      "modelAnswer": "Band 8+ model response demonstrating excellent language use",
+      "targetBand": 6.5,
+      "modelAnswer": "Target band model response (1 band above candidate's score)",
       "whyItWorks": ["Uses sophisticated vocabulary", "Demonstrates complex grammar", "Maintains fluent delivery"],
       "keyImprovements": ["Specific improvement 1", "Specific improvement 2"]
     }
@@ -1013,15 +1030,45 @@ REQUIRED JSON OUTPUT FORMAT
 \`\`\`
 
 ═══════════════════════════════════════════════════════════════════════════════
+LEXICAL OUTPUT INSTRUCTIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+IMPORTANT: Separate TWO types of lexical feedback:
+
+1. **vocabulary_upgrades**: For phrases the candidate said CORRECTLY, but could use a higher-band alternative
+   - "original": the phrase they actually used (correct English)
+   - "upgraded": the higher-band alternative
+   - "context": MUST be a verbatim substring from the transcript
+
+2. **recognition_corrections**: For speech recognition ERRORS (what was misheard)
+   - "captured": what the speech recognition transcribed (garbled/wrong)
+   - "intended": what the candidate actually said
+   - "context": the corrected full sentence
+
+Also include combined "lexical_upgrades" array for backward compatibility.
+
+═══════════════════════════════════════════════════════════════════════════════
+ADAPTIVE MODEL ANSWERS
+═══════════════════════════════════════════════════════════════════════════════
+
+For each modelAnswer:
+- "estimatedBand": The band score for THIS specific response
+- "targetBand": ONE band level above estimatedBand (e.g., if estimatedBand is 5.5, targetBand is 6.5)
+- "modelAnswer": A response that demonstrates the TARGET band level (not always Band 8+)
+
+This makes model answers more achievable and relevant to the candidate's current level.
+
+═══════════════════════════════════════════════════════════════════════════════
 FINAL INSTRUCTIONS
 ═══════════════════════════════════════════════════════════════════════════════
 
 1. Return EXACTLY ${numSegments} modelAnswers (one per segment above)
 2. Use the EXACT segment_key from input (e.g., "part1-q123")
 3. Provide CORRECTED transcript as candidateResponse
-4. Generate REALISTIC band 8+ model answers
+4. Generate REALISTIC model answers at targetBand level (1 band above candidate)
 5. Include part_analysis for each part with responses
 6. Group transcripts by part and by question
+7. Separate vocabulary_upgrades from recognition_corrections
 
 Return ONLY valid JSON. No preamble. No explanation.`;
 }

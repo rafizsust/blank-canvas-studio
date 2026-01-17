@@ -49,6 +49,21 @@ interface LexicalUpgrade {
   original: string;
   upgraded: string;
   context: string;
+  type?: 'vocabulary' | 'correction'; // Optional for backward compatibility
+}
+
+interface VocabularyUpgrade {
+  type: 'vocabulary';
+  original: string;
+  upgraded: string;
+  context: string;
+}
+
+interface RecognitionCorrection {
+  type: 'correction';
+  captured: string;
+  intended: string;
+  context: string;
 }
 
 interface PartAnalysis {
@@ -99,6 +114,8 @@ interface EvaluationReport {
   grammaticalRange?: CriterionScore;
   pronunciation: CriterionScore;
   lexical_upgrades: LexicalUpgrade[];
+  vocabulary_upgrades?: VocabularyUpgrade[];
+  recognition_corrections?: RecognitionCorrection[];
   part_analysis: PartAnalysis[];
   partAnalysis?: Array<{ partNumber: number; strengths: string[]; improvements: string[] }>;
   improvement_priorities: string[];
@@ -120,6 +137,7 @@ interface SpeakingResult {
     by_part: Record<number, string>;
     by_question?: Record<number, TranscriptEntry[]>;
   };
+  has_text_based_transcripts?: boolean; // True if evaluation was from browser transcripts
   created_at: string;
 }
 
@@ -186,6 +204,29 @@ function normalizeEvaluationReport(raw: any): EvaluationReport {
       original: String(u?.original ?? ''),
       upgraded: String(u?.upgraded ?? ''),
       context: String(u?.context ?? ''),
+      type: u?.type as 'vocabulary' | 'correction' | undefined,
+    }));
+  })();
+
+  // Parse new vocabulary_upgrades array
+  const vocabularyUpgrades: VocabularyUpgrade[] = (() => {
+    const list = Array.isArray(raw?.vocabulary_upgrades) ? raw.vocabulary_upgrades : [];
+    return list.map((u: any) => ({
+      type: 'vocabulary' as const,
+      original: String(u?.original ?? ''),
+      upgraded: String(u?.upgraded ?? ''),
+      context: String(u?.context ?? ''),
+    }));
+  })();
+
+  // Parse new recognition_corrections array
+  const recognitionCorrections: RecognitionCorrection[] = (() => {
+    const list = Array.isArray(raw?.recognition_corrections) ? raw.recognition_corrections : [];
+    return list.map((u: any) => ({
+      type: 'correction' as const,
+      captured: String(u?.captured ?? ''),
+      intended: String(u?.intended ?? ''),
+      context: String(u?.context ?? ''),
     }));
   })();
 
@@ -249,6 +290,8 @@ function normalizeEvaluationReport(raw: any): EvaluationReport {
     grammatical_range: normalizeCriterion('grammatical_range'),
     pronunciation: normalizeCriterion('pronunciation'),
     lexical_upgrades: lexicalUpgrades,
+    vocabulary_upgrades: vocabularyUpgrades,
+    recognition_corrections: recognitionCorrections,
     part_analysis: partAnalysis,
     improvement_priorities: asArray<string>(raw?.improvement_priorities ?? raw?.priorityImprovements ?? raw?.improvements),
     strengths_to_maintain: strengthsToMaintain,
@@ -402,6 +445,14 @@ export default function AISpeakingResults() {
 
     // confidenceTranscripts removed - no longer used
 
+    // Check if this was a text-based evaluation (has transcripts in answers)
+    const hasTextBasedTranscripts = Boolean(
+      data.answers && 
+      typeof data.answers === 'object' && 
+      (data.answers as any).transcripts && 
+      Object.keys((data.answers as any).transcripts).length > 0
+    );
+
     setResult({
       id: data.id,
       test_id: data.test_id,
@@ -412,6 +463,7 @@ export default function AISpeakingResults() {
         by_part: transcriptsByPart,
         by_question: transcriptsByQuestion,
       },
+      has_text_based_transcripts: hasTextBasedTranscripts,
       created_at: data.completed_at,
     });
     setLoading(false);
@@ -637,13 +689,13 @@ export default function AISpeakingResults() {
             </p>
           </div>
 
-          {/* Text-Based Evaluation Disclaimer */}
-          {Object.keys(result.audio_urls || {}).length === 0 && (
+          {/* Text-Based Evaluation Disclaimer - show when evaluation was text-based */}
+          {result.has_text_based_transcripts && (
             <Alert className="mb-4 md:mb-6 border-warning/50 bg-warning/10">
               <Info className="h-4 w-4 text-warning" />
               <AlertDescription className="text-sm">
-                <strong>Text-Only Evaluation:</strong> This assessment was generated from browser speech recognition (text-only mode). 
-                Pronunciation scoring is estimated, and fluency analysis is based on text structure only. 
+                <strong>Text-Based Evaluation:</strong> This assessment was generated from browser speech recognition transcripts. 
+                Pronunciation scores are estimated from speech recognition patterns, not actual audio analysis. 
                 For more accurate pronunciation and fluency assessment, use <strong>Accuracy Mode</strong> which analyzes your actual audio recording.
               </AlertDescription>
             </Alert>
@@ -922,54 +974,126 @@ export default function AISpeakingResults() {
             </TabsContent>
 
             {/* Lexical Upgrades Table */}
-            <TabsContent value="lexical" className="mt-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <ArrowUpRight className="w-5 h-5 text-primary" />
-                    Lexical Upgrade Suggestions
-                  </CardTitle>
-                  <CardDescription>
-                    Replace common words with Band 8+ alternatives
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {report.lexical_upgrades && report.lexical_upgrades.length > 0 ? (
+            <TabsContent value="lexical" className="mt-6 space-y-6">
+              {/* Recognition Corrections Section - What We Heard */}
+              {report.recognition_corrections && report.recognition_corrections.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                      <AlertCircle className="w-5 h-5 text-warning" />
+                      What We Heard
+                    </CardTitle>
+                    <CardDescription>
+                      Speech recognition may have misheard these phrases. Here's what you likely intended.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b">
-                            <th className="text-left py-3 px-2 font-medium">Original Word</th>
-                            <th className="text-left py-3 px-2 font-medium">Band 8+ Alternative</th>
+                            <th className="text-left py-3 px-2 font-medium">As Captured</th>
+                            <th className="text-left py-3 px-2 font-medium">Likely Intended</th>
                             <th className="text-left py-3 px-2 font-medium">Context</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {report.lexical_upgrades.map((upgrade, i) => (
+                          {report.recognition_corrections.map((correction, i) => (
                             <tr key={i} className="border-b last:border-0">
                               <td className="py-3 px-2">
-                                <Badge variant="outline" className="bg-destructive/10 text-destructive">
-                                  {upgrade.original}
+                                <Badge variant="outline" className="bg-warning/10 text-warning-foreground border-warning/30">
+                                  {correction.captured}
                                 </Badge>
                               </td>
                               <td className="py-3 px-2">
-                                <Badge variant="outline" className="bg-success/10 text-success">
-                                  {upgrade.upgraded}
+                                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                                  {correction.intended}
                                 </Badge>
                               </td>
                               <td className="py-3 px-2 text-muted-foreground italic">
-                                "{upgrade.context}"
+                                "{correction.context}"
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground text-center py-8">
-                      No lexical upgrades suggested - great vocabulary usage!
-                    </p>
-                  )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Vocabulary Upgrades Section */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ArrowUpRight className="w-5 h-5 text-primary" />
+                    Vocabulary Upgrades
+                  </CardTitle>
+                  <CardDescription>
+                    You used these phrases correctly. Here are higher-band alternatives to practice.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    // Use vocabulary_upgrades if available, otherwise fall back to lexical_upgrades
+                    const upgrades = report.vocabulary_upgrades && report.vocabulary_upgrades.length > 0
+                      ? report.vocabulary_upgrades
+                      : report.lexical_upgrades;
+                    
+                    // Calculate target band label based on user's score
+                    const getTargetBandLabel = (userBand: number): string => {
+                      if (userBand < 5) return "Band 5+";
+                      if (userBand < 5.5) return "Band 5.5+";
+                      if (userBand < 6) return "Band 6+";
+                      if (userBand < 6.5) return "Band 6.5+";
+                      if (userBand < 7) return "Band 7+";
+                      if (userBand < 7.5) return "Band 7.5+";
+                      return "Band 8+";
+                    };
+                    
+                    const targetBandLabel = getTargetBandLabel(report.overall_band);
+                    
+                    if (!upgrades || upgrades.length === 0) {
+                      return (
+                        <p className="text-muted-foreground text-center py-8">
+                          No vocabulary upgrades suggested - great vocabulary usage!
+                        </p>
+                      );
+                    }
+                    
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-3 px-2 font-medium">Your Phrase</th>
+                              <th className="text-left py-3 px-2 font-medium">{targetBandLabel} Alternative</th>
+                              <th className="text-left py-3 px-2 font-medium">Context</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {upgrades.map((upgrade, i) => (
+                              <tr key={i} className="border-b last:border-0">
+                                <td className="py-3 px-2">
+                                  <Badge variant="outline" className="bg-muted text-foreground">
+                                    {upgrade.original}
+                                  </Badge>
+                                </td>
+                                <td className="py-3 px-2">
+                                  <Badge variant="outline" className="bg-success/10 text-success">
+                                    {upgrade.upgraded}
+                                  </Badge>
+                                </td>
+                                <td className="py-3 px-2 text-muted-foreground italic">
+                                  "{upgrade.context}"
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             </TabsContent>
