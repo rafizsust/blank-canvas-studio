@@ -121,6 +121,27 @@ let flashKeyCache: ApiKeyRecord[] = [];
 let ttsKeyIndex = 0;
 let flashKeyIndex = 0;
 
+// Key cooldown tracking for RPM optimization
+const keyCooldowns: Map<string, number> = new Map();
+const KEY_COOLDOWN_MS = 60000; // 60 seconds cooldown after rate limit
+
+function isKeyCoolingDown(keyId: string): boolean {
+  const cooldownEnd = keyCooldowns.get(keyId);
+  if (!cooldownEnd) return false;
+  if (Date.now() >= cooldownEnd) {
+    keyCooldowns.delete(keyId);
+    return false;
+  }
+  return true;
+}
+
+function setKeyCooldown(keyId: string): void {
+  keyCooldowns.set(keyId, Date.now() + KEY_COOLDOWN_MS);
+}
+
+// Delay between TTS calls to prevent RPM exhaustion (15 RPM limit per key)
+const TTS_CALL_DELAY_MS = 350; // ~2.8 RPM per key, allowing headroom
+
 // List of models we use for content generation (non-TTS)
 const CONTENT_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
@@ -2018,7 +2039,17 @@ async function generateGeminiTtsDirect(
   for (let i = 0; i < keysToTry; i++) {
     const keyRecord = getNextTTSApiKey();
     if (!keyRecord || triedKeyIds.has(keyRecord.id)) continue;
+    
+    // Skip keys that are cooling down from rate limit
+    if (isKeyCoolingDown(keyRecord.id)) {
+      console.log(`[TTS] Skipping key ${keyRecord.id.slice(0,8)}... - cooling down`);
+      continue;
+    }
+    
     triedKeyIds.add(keyRecord.id);
+    
+    // Add delay between TTS calls to prevent RPM exhaustion
+    await new Promise(resolve => setTimeout(resolve, TTS_CALL_DELAY_MS));
     
     try {
       const resp = await fetchWithTimeout(
@@ -2050,8 +2081,9 @@ async function generateGeminiTtsDirect(
           console.log(`Key ${keyRecord.id} hit permanent TTS quota limit, marking as exhausted for ${TTS_MODEL}`);
           await markTTSQuotaExhausted(supabaseServiceClient, keyRecord.id);
         } else if (isQuotaExhaustedError(resp.status, errorText)) {
-          // Rate limit - just log and continue to next key
-          console.log(`Key ${keyRecord.id} hit rate limit for TTS, trying next key`);
+          // Rate limit - set cooldown and continue to next key
+          console.log(`Key ${keyRecord.id} hit rate limit for TTS, setting 60s cooldown`);
+          setKeyCooldown(keyRecord.id);
         } else {
           // Track error for this key - deactivate on auth errors
           await incrementKeyErrorCount(supabaseServiceClient, keyRecord.id, resp.status === 401 || resp.status === 403);
@@ -2111,7 +2143,17 @@ ${text}`;
   for (let i = 0; i < keysToTry; i++) {
     const keyRecord = getNextTTSApiKey();
     if (!keyRecord || triedKeyIds.has(keyRecord.id)) continue;
+    
+    // Skip keys that are cooling down from rate limit
+    if (isKeyCoolingDown(keyRecord.id)) {
+      console.log(`[TTS Multi] Skipping key ${keyRecord.id.slice(0,8)}... - cooling down`);
+      continue;
+    }
+    
     triedKeyIds.add(keyRecord.id);
+    
+    // Add delay between TTS calls to prevent RPM exhaustion
+    await new Promise(resolve => setTimeout(resolve, TTS_CALL_DELAY_MS));
 
     try {
       const resp = await fetchWithTimeout(
@@ -2156,8 +2198,9 @@ ${text}`;
           console.log(`Key ${keyRecord.id} hit permanent TTS quota limit, marking as exhausted for ${TTS_MODEL}`);
           await markTTSQuotaExhausted(supabaseServiceClient, keyRecord.id);
         } else if (isQuotaExhaustedError(resp.status, errorText)) {
-          // Rate limit - just log and continue to next key
-          console.log(`Key ${keyRecord.id} hit rate limit for TTS (multi-speaker), trying next key`);
+          // Rate limit - set cooldown and continue to next key
+          console.log(`Key ${keyRecord.id} hit rate limit for TTS (multi-speaker), setting 60s cooldown`);
+          setKeyCooldown(keyRecord.id);
         } else {
           await incrementKeyErrorCount(
             supabaseServiceClient,

@@ -530,6 +530,13 @@ serve(async (req) => {
       heartbeatInterval = null;
     }
 
+    // Add delay between part evaluations to prevent API key burst
+    // This is especially important for users with single API keys
+    if (partToProcess && partsToEvaluate.length > 1) {
+      console.log(`[speaking-evaluate-job] Cooling down 2s before next part evaluation...`);
+      await sleep(2000);
+    }
+
     // Check if all parts are done
     const remainingParts = [1, 2, 3].filter(p => {
       if (partialResults[`part${p}`]) return false;

@@ -169,6 +169,14 @@ export default function AIPracticeSpeakingTest() {
   
   // Track failed upload attempts for retry functionality
   const [failedUploads, setFailedUploads] = useState<Array<{ key: string; error: string }>>([]);
+  
+  // TTS failure tracking for user notification
+  const ttsFailureCountRef = useRef(0);
+  const [showTTSFailureNotice, setShowTTSFailureNotice] = useState(false);
+  
+  // Test-level timeout protection (45 minutes max)
+  const TEST_MAX_DURATION_MS = 45 * 60 * 1000;
+  const testStartTimeRef = useRef<number | null>(null);
 
   
   // Submission error state (for resubmit capability)
@@ -768,6 +776,17 @@ export default function AIPracticeSpeakingTest() {
       console.warn(`[playPresetAudio] Falling back to browser TTS for: ${audioKey}`);
       setUsingDeviceAudio(true);
       setCurrentSpeakingText(text);
+      
+      // Track TTS failures and notify user after consecutive failures
+      ttsFailureCountRef.current += 1;
+      if (ttsFailureCountRef.current >= 2 && !showTTSFailureNotice) {
+        setShowTTSFailureNotice(true);
+        toast({
+          title: 'Audio playback issues',
+          description: 'Voice audio is having issues. You can continue reading the questions on screen.',
+          duration: 5000,
+        });
+      }
 
       if (!isMutedRef.current) {
         tts.speak(text);
@@ -1739,7 +1758,8 @@ export default function AIPracticeSpeakingTest() {
 
   // Start test function
   const startTest = () => {
-    // Prefetch all Part 1 audio when test starts
+    // Start test timer for global timeout protection
+    testStartTimeRef.current = Date.now();
     
     // Prefetch all Part 1 audio when test starts
     prefetchPartAudio(1);
@@ -1758,6 +1778,29 @@ export default function AIPracticeSpeakingTest() {
       startPart3();
     }
   };
+  
+  // Global test timeout protection - prevents infinite stuck states
+  useEffect(() => {
+    if (!testStartTimeRef.current) return;
+    
+    const checkTimeout = () => {
+      if (!testStartTimeRef.current || !isMountedRef.current) return;
+      
+      const elapsed = Date.now() - testStartTimeRef.current;
+      if (elapsed >= TEST_MAX_DURATION_MS && phase !== 'done' && phase !== 'submitting' && phase !== 'submission_error') {
+        console.warn('[AIPracticeSpeakingTest] Test timeout reached (45 min) - auto-submitting');
+        toast({
+          title: 'Test session timed out',
+          description: 'Your test has reached the maximum duration. Submitting your progress.',
+          variant: 'destructive',
+        });
+        submitTest();
+      }
+    };
+    
+    const interval = setInterval(checkTimeout, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, [phase, toast]);
 
   // Format time display
   const formatTime = (seconds: number) => {

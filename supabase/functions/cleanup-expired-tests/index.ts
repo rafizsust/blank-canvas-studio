@@ -138,11 +138,56 @@ Deno.serve(async (req) => {
       );
     }
 
+    // === PHASE 2: Clean up user-uploaded speaking recordings ===
+    // These are stored in R2 under "speaking-audio/" prefix
+    let userRecordingsDeleted = 0;
+    const userRecordingErrors: string[] = [];
+    
+    try {
+      // Query speaking_evaluation_jobs for completed jobs older than 7 days
+      const { data: oldJobs } = await supabase
+        .from("speaking_evaluation_jobs")
+        .select("id, file_paths")
+        .lt("created_at", cutoffIso)
+        .in("status", ["completed", "failed"]);
+      
+      if (oldJobs && oldJobs.length > 0) {
+        console.log(`[cleanup-expired-tests] Found ${oldJobs.length} old speaking jobs to clean`);
+        
+        for (const job of oldJobs) {
+          const filePaths = job.file_paths as Record<string, string> | null;
+          if (filePaths) {
+            for (const [, r2Key] of Object.entries(filePaths)) {
+              if (r2Key && typeof r2Key === "string") {
+                const deleteResult = await deleteFromR2(r2Key);
+                if (deleteResult.success) {
+                  userRecordingsDeleted++;
+                } else {
+                  userRecordingErrors.push(`Failed to delete ${r2Key}: ${deleteResult.error}`);
+                }
+              }
+            }
+          }
+        }
+        
+        // Delete the old job records
+        const jobIds = oldJobs.map(j => j.id);
+        await supabase
+          .from("speaking_evaluation_jobs")
+          .delete()
+          .in("id", jobIds);
+        
+        console.log(`[cleanup-expired-tests] Deleted ${userRecordingsDeleted} user recording files`);
+      }
+    } catch (userRecErr) {
+      console.warn("[cleanup-expired-tests] Error cleaning user recordings:", userRecErr);
+    }
+
     const result: CleanupResult = {
       success: true,
       deletedFromDb: testIds.length,
-      deletedFromR2,
-      r2Errors,
+      deletedFromR2: deletedFromR2 + userRecordingsDeleted,
+      r2Errors: [...r2Errors, ...userRecordingErrors],
     };
 
     console.log(`[cleanup-expired-tests] Cleanup complete:`, result);
