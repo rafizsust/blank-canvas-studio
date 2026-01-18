@@ -70,6 +70,43 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   hard: 'bg-destructive/20 text-destructive border-destructive/30',
 };
 
+// Live elapsed time component for pending evaluations
+function LiveElapsedTime({ startTime }: { startTime: string }) {
+  const [elapsed, setElapsed] = useState('');
+  
+  useEffect(() => {
+    const start = new Date(startTime).getTime();
+    
+    const update = () => {
+      const now = Date.now();
+      const durationMs = now - start;
+      
+      if (durationMs < 60000) {
+        setElapsed(`${Math.round(durationMs / 1000)}s`);
+      } else if (durationMs < 3600000) {
+        const mins = Math.floor(durationMs / 60000);
+        const secs = Math.round((durationMs % 60000) / 1000);
+        setElapsed(`${mins}m ${secs}s`);
+      } else {
+        const hours = Math.floor(durationMs / 3600000);
+        const mins = Math.floor((durationMs % 3600000) / 60000);
+        setElapsed(`${hours}h ${mins}m`);
+      }
+    };
+    
+    update(); // Initial update
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+  
+  return (
+    <span className="flex items-center gap-1 text-primary animate-pulse">
+      <Timer className="w-3 h-3" />
+      {elapsed}...
+    </span>
+  );
+}
+
 export default function AIPracticeHistory() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -883,6 +920,34 @@ export default function AIPracticeHistory() {
                             <span>
                               {format(new Date(test.generated_at), 'MMM d, yyyy h:mm a')}
                             </span>
+                            {/* Processing time display */}
+                            {hasResult && result?.completed_at && (
+                              <span className="flex items-center gap-1 text-success">
+                                <Timer className="w-3 h-3" />
+                                {(() => {
+                                  // Calculate processing time from test generation to result completion
+                                  const generatedAt = new Date(test.generated_at).getTime();
+                                  const completedAt = new Date(result.completed_at).getTime();
+                                  const durationMs = completedAt - generatedAt;
+                                  
+                                  if (durationMs < 60000) {
+                                    return `${Math.round(durationMs / 1000)}s`;
+                                  } else if (durationMs < 3600000) {
+                                    const mins = Math.floor(durationMs / 60000);
+                                    const secs = Math.round((durationMs % 60000) / 1000);
+                                    return `${mins}m ${secs}s`;
+                                  } else {
+                                    const hours = Math.floor(durationMs / 3600000);
+                                    const mins = Math.floor((durationMs % 3600000) / 60000);
+                                    return `${hours}h ${mins}m`;
+                                  }
+                                })()}
+                              </span>
+                            )}
+                            {/* Live elapsed time for pending evaluations */}
+                            {isPendingEval && pendingJob && ['pending', 'processing', 'retrying'].includes(pendingJob.status) && (
+                              <LiveElapsedTime startTime={pendingJob.created_at} />
+                            )}
                           </div>
                         </div>
                         

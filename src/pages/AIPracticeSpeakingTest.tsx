@@ -1185,18 +1185,35 @@ export default function AIPracticeSpeakingTest() {
 
           toast({
             title: 'Evaluation Complete!',
-            description: `Results ready in ${(totalTimeMs / 1000).toFixed(1)}s. Redirecting to results...`,
+            description: `Band ${data.overallBand?.toFixed(1)} in ${(totalTimeMs / 1000).toFixed(1)}s. Check history for results.`,
           });
 
           setPhase('done');
 
-          // Navigate to results
+          // Navigate to history page - consistent with async mode
           if (!exitRequestedRef.current && isMountedRef.current) {
             await exitFullscreen();
-            navigate(`/ai-practice/speaking/results/${data.resultId}`);
+            navigate('/ai-practice/history');
           }
         } else if (data?.error) {
-          throw new Error(data.error);
+          // Check if we should fallback to async mode
+          const errorMsg = data.error?.toLowerCase() || '';
+          const isRetriable = errorMsg.includes('rate limit') || 
+                              errorMsg.includes('429') || 
+                              errorMsg.includes('timeout') ||
+                              errorMsg.includes('quota') ||
+                              errorMsg.includes('overloaded');
+          
+          if (isRetriable) {
+            console.warn('[AIPracticeSpeakingTest] Parallel mode failed with retriable error, falling back to async...');
+            toast({
+              title: 'Switching to Background Mode',
+              description: 'Rate limit reached. Your test will be evaluated in the background.',
+            });
+            // Don't throw - let it continue to async mode below
+          } else {
+            throw new Error(data.error);
+          }
         } else {
           throw new Error('Unexpected response from parallel evaluation');
         }
