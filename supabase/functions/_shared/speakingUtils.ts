@@ -190,7 +190,26 @@ export function sleep(ms: number): Promise<void> {
 // ============================================================================
 
 /**
- * Calculate overall band score from criteria scores
+ * IELTS band rounding rules:
+ * - Round to nearest 0.5
+ * - If fractional part is .25 or above, round up to .5
+ * - If fractional part is .75 or above, round up to next whole band
+ */
+export function roundIELTSBand(rawAverage: number): number {
+  if (!Number.isFinite(rawAverage)) return 0;
+  
+  const avg = Math.max(0, Math.min(9, rawAverage));
+  const floor = Math.floor(avg);
+  const fraction = avg - floor;
+  
+  if (fraction < 0.25) return floor;
+  if (fraction < 0.75) return floor + 0.5;
+  return floor + 1;
+}
+
+/**
+ * Calculate overall band score from criteria scores using IELTS rounding
+ * This should match frontend computeSpeakingOverallBandFromCriteria
  */
 export function calculateBandFromCriteria(criteria: any): number {
   const criteriaKeys = ['fluency_coherence', 'lexical_resource', 'grammatical_range', 'pronunciation'];
@@ -209,8 +228,8 @@ export function calculateBandFromCriteria(criteria: any): number {
   if (count === 0) return 0;
   
   const avg = total / count;
-  // Round to nearest 0.5
-  return Math.round(avg * 2) / 2;
+  // Use proper IELTS rounding
+  return roundIELTSBand(avg);
 }
 
 /**
@@ -247,8 +266,8 @@ export function computeWeightedPartBand(partScores: {
   if (totalWeight < 0.5) return null;
 
   const rawBand = weightedTotal / totalWeight;
-  // Round to nearest 0.5
-  return Math.round(rawBand * 2) / 2;
+  // Use proper IELTS rounding
+  return roundIELTSBand(rawBand);
 }
 
 // ============================================================================

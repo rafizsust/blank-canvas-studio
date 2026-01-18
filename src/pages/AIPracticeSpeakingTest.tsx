@@ -1040,7 +1040,18 @@ export default function AIPracticeSpeakingTest() {
       presetAudioTimersRef.current.endingSafety = undefined;
     }
 
-    setPhase('submitting');
+    // Prevent double submission
+    if (phaseRef.current === 'submitting' || phaseRef.current === 'done') {
+      console.log('[AIPracticeSpeakingTest] submitTest: Already submitting or done, skipping');
+      return;
+    }
+    
+    // Only set submitting phase for BASIC mode
+    // ACCURACY mode navigates immediately and shows progress on History page (no overlay flash)
+    if (evaluationMode !== 'accuracy') {
+      setPhase('submitting');
+    }
+    
     setEvaluationStep(0);
     setFailedUploads([]); // Reset failed uploads on new submission attempt
     setSubmissionProgress({ step: 'Preparing', detail: 'Getting ready to process your recordings...', currentItem: 0, totalItems: 0 });
@@ -1109,14 +1120,11 @@ export default function AIPracticeSpeakingTest() {
         let parallelSuccess = false;
         
         try {
-          setSubmissionProgress({ 
-            step: 'Converting Audio', 
-            detail: `Converting ${totalAudioFiles} audio files in parallel...`, 
-            currentItem: 0, 
-            totalItems: totalAudioFiles 
-          });
+          // In accuracy mode, DON'T set phase to 'submitting' - we navigate immediately
+          // The overlay flash happens because phase='submitting' triggers the full-screen overlay
+          // Instead, keep the current phase and navigate once ending audio completes
           
-          // Update tracker for History page
+          // Update tracker for History page (History will show progress, not this page)
           if (testId) {
             patchSpeakingSubmissionTracker(testId, {
               stage: 'converting' as SpeakingSubmissionStage,
@@ -1169,14 +1177,8 @@ export default function AIPracticeSpeakingTest() {
           }
 
           setEvaluationStep(2);
-          setSubmissionProgress({ 
-            step: 'Evaluating', 
-            detail: 'Sending audio for parallel evaluation (Google + R2 upload happening simultaneously)...', 
-            currentItem: 0, 
-            totalItems: 0 
-          });
           
-          // Update tracker for History page
+          // Update tracker for History page (no local submissionProgress since overlay won't show)
           if (testId) {
             patchSpeakingSubmissionTracker(testId, {
               stage: 'evaluating' as SpeakingSubmissionStage,

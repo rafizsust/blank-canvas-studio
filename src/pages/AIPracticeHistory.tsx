@@ -138,7 +138,7 @@ function LiveElapsedTime({ startTime }: { startTime: string }) {
   );
 }
 
-// Timing breakdown component
+// Timing breakdown component - only shows when evaluation is COMPLETED
 function TimingBreakdown({ 
   timing, 
   tracker,
@@ -149,6 +149,11 @@ function TimingBreakdown({
   testId?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  
+  // Only show timing after evaluation is complete (not during)
+  // Check if tracker stage is 'completed' or if we have result timing
+  const isComplete = tracker?.stage === 'completed' || !!timing;
+  if (!isComplete) return null;
   
   // Combine timing from multiple sources in priority order:
   // 1. Completed result timing (most reliable, persisted in DB)
@@ -161,7 +166,8 @@ function TimingBreakdown({
   const displayTiming: Record<string, number> = timing?.timing || trackerTiming || persistedTimingRecord || {};
   const totalMs = timing?.totalTimeMs || displayTiming.totalMs || 0;
   
-  if (Object.keys(displayTiming).length === 0 && totalMs === 0) return null;
+  // Only show if we have actual timing data
+  if (totalMs === 0 && Object.keys(displayTiming).length === 0) return null;
   
   const formatMs = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
@@ -178,20 +184,24 @@ function TimingBreakdown({
     { key: 'saveResultMs', label: 'Save', icon: Target },
   ].filter(s => displayTiming[s.key] !== undefined);
   
-  if (stages.length === 0) return null;
+  // If we only have totalMs, just show that
+  const hasDetails = stages.length > 0;
   
   return (
     <div className="mt-2">
       <button
-        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        onClick={(e) => { e.stopPropagation(); hasDetails && setExpanded(!expanded); }}
+        className={cn(
+          "flex items-center gap-1 text-xs text-muted-foreground transition-colors",
+          hasDetails && "hover:text-foreground cursor-pointer"
+        )}
       >
-        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        {hasDetails && (expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
         <span>Timing breakdown</span>
         {totalMs > 0 && <span className="text-success">({formatMs(totalMs)} total)</span>}
       </button>
       
-      {expanded && (
+      {expanded && hasDetails && (
         <div className="mt-2 pl-4 border-l-2 border-muted space-y-1">
           {stages.map(({ key, label, icon: Icon }) => (
             <div key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1102,11 +1112,26 @@ export default function AIPracticeHistory() {
                             <Badge variant="outline" className={DIFFICULTY_COLORS[test.difficulty]}>
                               {test.difficulty}
                             </Badge>
-                            {hasResult && result?.band_score && (
-                              <Badge className="bg-primary/20 text-primary border-primary/30">
-                                Band {Number(result.band_score).toFixed(1)}
-                              </Badge>
-                            )}
+                            {hasResult && result?.band_score && (() => {
+                              // Recalculate band from criteria to match Results page
+                              const qr = result.question_results as any;
+                              const criteria = qr?.criteria || qr || {};
+                              const fluency = criteria?.fluency_coherence?.band ?? criteria?.fluency_coherence?.score ?? 0;
+                              const lexical = criteria?.lexical_resource?.band ?? criteria?.lexical_resource?.score ?? 0;
+                              const grammar = criteria?.grammatical_range?.band ?? criteria?.grammatical_range?.score ?? 0;
+                              const pronunciation = criteria?.pronunciation?.band ?? criteria?.pronunciation?.score ?? 0;
+                              const avg = (fluency + lexical + grammar + pronunciation) / 4;
+                              // IELTS rounding: .25 rounds up to .5, .75 rounds up to next whole
+                              const floor = Math.floor(avg);
+                              const fraction = avg - floor;
+                              const computedBand = fraction < 0.25 ? floor : fraction < 0.75 ? floor + 0.5 : floor + 1;
+                              const displayBand = computedBand > 0 ? computedBand : Number(result.band_score);
+                              return (
+                                <Badge className="bg-primary/20 text-primary border-primary/30">
+                                  Band {displayBand.toFixed(1)}
+                                </Badge>
+                              );
+                            })()}
                             {hasResult && (
                               <Badge variant="secondary" className="gap-1 text-xs">
                                 <Eye className="w-3 h-3" />
@@ -1152,11 +1177,6 @@ export default function AIPracticeHistory() {
                                   <>
                                     <AudioLines className="w-3 h-3 animate-pulse" />
                                     <span>Converting audio...</span>
-                                    {clientTracker.timing?.conversionMs && (
-                                      <span className="text-muted-foreground">
-                                        ({Math.round((clientTracker.timing as Record<string, number>).conversionMs / 1000)}s)
-                                      </span>
-                                    )}
                                   </>
                                 )}
                                 {clientTracker.stage === 'uploading' && (
@@ -1175,21 +1195,16 @@ export default function AIPracticeHistory() {
                                   <>
                                     <Zap className="w-3 h-3 animate-pulse" />
                                     <span>AI Evaluating...</span>
-                                    {clientTracker.timing?.conversionMs && (
-                                      <span className="text-muted-foreground text-[10px]">
-                                        (conv: {Math.round((clientTracker.timing as Record<string, number>).conversionMs / 1000)}s)
-                                      </span>
-                                    )}
                                   </>
                                 )}
                               </Badge>
                             )}
-                            {/* Completed stage indicator with timing */}
-                            {clientTracker?.stage === 'completed' && clientTracker.timing && (
-                              <Badge variant="outline" className="gap-1.5 text-xs border-success/50 text-success">
-                                <Zap className="w-3 h-3" />
+                            {/* Job-level progress (from DB realtime) with part progress */}
+                            {isPendingEval && pendingJob && ['pending', 'processing'].includes(pendingJob.status) && pendingJob.current_part && pendingJob.total_parts && (
+                              <Badge variant="outline" className="gap-1.5 text-xs border-primary/50 text-primary animate-pulse">
+                                <Zap className="w-3 h-3 animate-pulse" />
                                 <span>
-                                  {Math.round(((clientTracker.timing as Record<string, number>).totalMs || 0) / 1000)}s
+                                  Evaluating Part {pendingJob.current_part} of {pendingJob.total_parts}
                                 </span>
                               </Badge>
                             )}

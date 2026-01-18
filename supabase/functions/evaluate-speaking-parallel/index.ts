@@ -644,18 +644,24 @@ serve(async (req) => {
       });
     }
 
-    // Calculate band score using weighted part scores if available
+    // Calculate band score - PRIORITIZE criteria-derived band for consistency with frontend
+    // The criteria (fluency, lexical, grammar, pronunciation) are the official IELTS scoring
+    // Part scores and question bands are secondary signals
+    const derivedFromCriteria = calculateBandFromCriteria(evaluationResult.criteria);
     const partScores = evaluationResult.part_scores || {};
     const weightedBand = computeWeightedPartBand(partScores);
     const derivedFromQuestions = computeOverallBandFromQuestionBands(evaluationResult);
-    const derivedFromCriteria = calculateBandFromCriteria(evaluationResult.criteria);
     
-    const overallBand = weightedBand ?? 
-      (typeof evaluationResult?.overall_band === 'number' ? evaluationResult.overall_band : null) ??
-      derivedFromQuestions ?? 
-      derivedFromCriteria;
+    // Prioritize criteria band (most reliable, matches frontend calculation)
+    const overallBand = derivedFromCriteria > 0 
+      ? derivedFromCriteria 
+      : (weightedBand ?? 
+        (typeof evaluationResult?.overall_band === 'number' ? evaluationResult.overall_band : null) ??
+        derivedFromQuestions ?? 
+        0);
 
     evaluationResult.overall_band = overallBand;
+    console.log(`[evaluate-speaking-parallel] Band calculation: criteria=${derivedFromCriteria}, weighted=${weightedBand}, questions=${derivedFromQuestions}, final=${overallBand}`);
 
     // Wait for background upload to complete before saving results
     // This ensures we have the audio URLs for the result record
