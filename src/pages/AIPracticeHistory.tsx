@@ -29,6 +29,8 @@ import {
   Loader2,
   Bell,
   BellOff,
+  Zap,
+  Timer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -393,6 +395,10 @@ export default function AIPracticeHistory() {
   // Retry a failed/stale speaking evaluation
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
+  
+  // Parallel mode resubmission state
+  const [parallelResubmitting, setParallelResubmitting] = useState<string | null>(null);
+  const [parallelTiming, setParallelTiming] = useState<Record<string, { totalTimeMs: number; timing: Record<string, number> }>>({});
 
   // Cancel a pending/processing speaking evaluation
   const handleCancelEvaluation = async (testId: string) => {
@@ -480,6 +486,76 @@ export default function AIPracticeHistory() {
       });
     } finally {
       setRetryingJobId(null);
+    }
+  };
+
+  // Handle Parallel Mode resubmission (uses stored R2 audio, single API call)
+  const handleParallelResubmit = async (testId: string) => {
+    setParallelResubmitting(testId);
+    const startTime = Date.now();
+    
+    console.log(`[AIPracticeHistory] Starting parallel mode resubmission for test ${testId}`);
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: 'Error', description: 'Please log in to resubmit', variant: 'destructive' });
+        return;
+      }
+
+      toast({
+        title: 'Parallel Mode Started',
+        description: 'Resubmitting with accuracy mode... This may take 30-60 seconds.',
+      });
+
+      const response = await supabase.functions.invoke('resubmit-parallel', {
+        body: { testId },
+      });
+
+      const clientElapsed = Date.now() - startTime;
+
+      if (response.error) {
+        throw new Error(response.error.message);
+      }
+
+      const data = response.data;
+      
+      if (data?.success) {
+        console.log('[AIPracticeHistory] Parallel resubmission successful:', {
+          totalTimeMs: data.totalTimeMs,
+          clientElapsedMs: clientElapsed,
+          timing: data.timing,
+          band: data.overallBand,
+          model: data.model,
+        });
+
+        setParallelTiming(prev => ({
+          ...prev,
+          [testId]: {
+            totalTimeMs: data.totalTimeMs,
+            timing: data.timing,
+          },
+        }));
+
+        toast({
+          title: `✅ Parallel Mode Complete!`,
+          description: `Band ${data.overallBand?.toFixed(1)} in ${(data.totalTimeMs / 1000).toFixed(1)}s (server) / ${(clientElapsed / 1000).toFixed(1)}s (client)`,
+        });
+
+        // Reload tests to show updated results
+        loadTests();
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
+    } catch (err: any) {
+      console.error('[AIPracticeHistory] Parallel resubmission error:', err);
+      toast({
+        title: 'Parallel Mode Failed',
+        description: err.message || 'Failed to resubmit with parallel mode',
+        variant: 'destructive',
+      });
+    } finally {
+      setParallelResubmitting(null);
     }
   };
   const handleViewResults = (test: AIPracticeTest) => {
@@ -866,6 +942,36 @@ export default function AIPracticeHistory() {
                                 {pendingJob.status === 'failed' ? 'Retry Failed' : `Retry`}
                               </span>
                             </Button>
+                          )}
+                          {/* Parallel Mode Resubmit button for speaking tests with completed jobs */}
+                          {test.module === 'speaking' && hasResult && !isPendingEval && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleParallelResubmit(test.id)}
+                              disabled={parallelResubmitting === test.id}
+                              className="gap-1 border-primary/50 text-primary hover:bg-primary/10"
+                              title="Resubmit using parallel accuracy mode (uses stored audio)"
+                            >
+                              {parallelResubmitting === test.id ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <Timer className="w-3 h-3" />
+                                </>
+                              ) : (
+                                <Zap className="w-4 h-4" />
+                              )}
+                              <span className="hidden sm:inline">
+                                {parallelResubmitting === test.id ? 'Evaluating...' : 'Parallel Mode'}
+                              </span>
+                            </Button>
+                          )}
+                          {/* Timing display for parallel mode results */}
+                          {parallelTiming[test.id] && (
+                            <Badge variant="outline" className="text-xs gap-1 border-success/50 text-success">
+                              <Timer className="w-3 h-3" />
+                              {(parallelTiming[test.id].totalTimeMs / 1000).toFixed(1)}s
+                            </Badge>
                           )}
                           <Button
                             variant="ghost"
