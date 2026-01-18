@@ -1183,13 +1183,39 @@ export default function AIPracticeSpeakingTest() {
             patchSpeakingSubmissionTracker(testId, {
               stage: 'evaluating' as SpeakingSubmissionStage,
               detail: 'Sending audio for parallel evaluation...',
+              timing: { conversionMs: conversionTimeMs },
             });
           }
 
           console.log(`[AIPracticeSpeakingTest] Calling evaluate-speaking-parallel with ${Object.keys(audioData).length} audio segments`);
           const evaluationStartTime = Date.now();
 
-          const { data, error } = await supabase.functions.invoke('evaluate-speaking-parallel', {
+          // =====================================================================
+          // IMMEDIATE REDIRECT: Fire the edge function call but don't wait for it.
+          // Navigate to history page immediately and let the tracker + realtime
+          // subscriptions show progress/completion to the user.
+          // =====================================================================
+          
+          // Track topic completion early (user has completed the speaking part)
+          if (test?.topic) incrementCompletion(test.topic);
+          
+          toast({
+            title: 'Submitting for Evaluation',
+            description: 'Your test has been submitted. Check history for progress.',
+          });
+
+          // Delete persisted audio (we've captured it in audioData already)
+          if (testId) deleteAudioSegments(testId).catch(() => {});
+
+          // Navigate immediately to history
+          if (!exitRequestedRef.current && isMountedRef.current) {
+            await exitFullscreen();
+            navigate('/ai-practice/history');
+          }
+
+          // Fire the edge function call in the background (fire-and-forget)
+          // The History page will pick up updates via realtime subscription + tracker
+          supabase.functions.invoke('evaluate-speaking-parallel', {
             body: {
               testId,
               audioData,
@@ -1198,85 +1224,54 @@ export default function AIPracticeSpeakingTest() {
               difficulty: test?.difficulty,
               fluencyFlag,
             },
+          }).then(({ data, error }) => {
+            const evaluationTimeMs = Date.now() - evaluationStartTime;
+            
+            if (error) {
+              console.error('[AIPracticeSpeakingTest] Parallel evaluation error (background):', error);
+              if (testId) {
+                patchSpeakingSubmissionTracker(testId, {
+                  stage: 'failed' as SpeakingSubmissionStage,
+                  lastError: error.message || 'Evaluation failed',
+                });
+              }
+              return;
+            }
+
+            if (data?.success && data?.resultId) {
+              const totalTimeMs = conversionTimeMs + evaluationTimeMs;
+              console.log(`[AIPracticeSpeakingTest] ✅ Parallel evaluation complete (background)!`);
+              console.log(`[AIPracticeSpeakingTest] Timing: conversion=${conversionTimeMs}ms, evaluation=${evaluationTimeMs}ms, total=${totalTimeMs}ms`);
+              
+              // Clear tracker on success - History page will pick up from realtime subscription
+              if (testId) clearSpeakingSubmissionTracker(testId);
+            } else if (data?.error) {
+              console.error('[AIPracticeSpeakingTest] Parallel evaluation returned error:', data.error);
+              if (testId) {
+                patchSpeakingSubmissionTracker(testId, {
+                  stage: 'failed' as SpeakingSubmissionStage,
+                  lastError: data.error,
+                });
+              }
+            }
+          }).catch((err) => {
+            console.error('[AIPracticeSpeakingTest] Parallel evaluation exception (background):', err);
+            if (testId) {
+              patchSpeakingSubmissionTracker(testId, {
+                stage: 'failed' as SpeakingSubmissionStage,
+                lastError: err?.message || 'Network error',
+              });
+            }
           });
 
-          const evaluationTimeMs = Date.now() - evaluationStartTime;
-
-          if (exitRequestedRef.current || !isMountedRef.current) return;
-
-          if (error) {
-            console.error('[AIPracticeSpeakingTest] Parallel evaluation error:', error);
-            throw new Error(error.message || 'Evaluation failed');
-          }
-
-          if (data?.success && data?.resultId) {
-            const totalTimeMs = conversionTimeMs + evaluationTimeMs;
-            console.log(`[AIPracticeSpeakingTest] ✅ Parallel evaluation complete!`);
-            console.log(`[AIPracticeSpeakingTest] Timing: conversion=${conversionTimeMs}ms, evaluation=${evaluationTimeMs}ms, total=${totalTimeMs}ms`);
-            
-            setEvaluationStep(3);
-            setSubmissionProgress({ 
-              step: 'Complete!', 
-              detail: `Evaluation finished in ${(totalTimeMs / 1000).toFixed(1)}s`, 
-              currentItem: 0, 
-              totalItems: 0 
-            });
-
-            // Delete persisted audio (processed successfully)
-            if (testId) await deleteAudioSegments(testId);
-
-            // Track topic completion
-            if (test?.topic) incrementCompletion(test.topic);
-
-            toast({
-              title: 'Evaluation Complete!',
-              description: `Band ${data.overallBand?.toFixed(1)} in ${(totalTimeMs / 1000).toFixed(1)}s. Check history for results.`,
-            });
-
-            setPhase('done');
-            parallelSuccess = true;
-            
-            // Clear tracker on success
-            if (testId) clearSpeakingSubmissionTracker(testId);
-
-            // Navigate to history page - consistent with async mode
-            if (!exitRequestedRef.current && isMountedRef.current) {
-              await exitFullscreen();
-              navigate('/ai-practice/history');
-            }
-            return; // Exit early - accuracy mode complete
-          } else if (data?.error) {
-            // Check if we should fallback to async mode
-            const errorMsg = String(data.error).toLowerCase();
-            const isRetriable = errorMsg.includes('rate limit') || 
-                                errorMsg.includes('429') || 
-                                errorMsg.includes('timeout') ||
-                                errorMsg.includes('quota') ||
-                                errorMsg.includes('overloaded') ||
-                                errorMsg.includes('resource_exhausted');
-            
-            if (isRetriable) {
-              console.warn('[AIPracticeSpeakingTest] Parallel mode failed with retriable error, falling back to async...');
-              
-              setSubmissionProgress({ 
-                step: 'Switching to Background Mode', 
-                detail: 'Rate limit reached. Uploading for background evaluation...', 
-                currentItem: 0, 
-                totalItems: 0 
-              });
-              
-              toast({
-                title: 'Switching to Background Mode',
-                description: 'Rate limit reached. Your test will be evaluated in the background.',
-              });
-              
-              // Fall through to async mode - parallelSuccess stays false
-            } else {
-              throw new Error(data.error);
-            }
-          } else {
-            throw new Error('Unexpected response from parallel evaluation');
-          }
+          // Mark as success to skip fallback async flow
+          setPhase('done');
+          parallelSuccess = true;
+          return; // Exit early - accuracy mode initiated
+          
+          // NOTE: The old blocking code is removed. We no longer wait for the response.
+          // The code below for checking data?.error fallback is also removed since we return early.
+          // If the edge function fails, the tracker will be updated and History page will show the error.
         } catch (parallelError: any) {
           // Check if this is a retriable error that should fallback to async
           const errorMsg = String(parallelError?.message || '').toLowerCase();

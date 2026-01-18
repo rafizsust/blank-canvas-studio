@@ -253,7 +253,7 @@ export default function AIPracticeHistory() {
 
     checkExistingTrackers();
 
-    // Listen for tracker updates
+    // Listen for tracker updates (custom events from same tab)
     const handleTrackerUpdate = (e: CustomEvent<{ testId: string; tracker: SpeakingSubmissionTracker | null }>) => {
       const { testId, tracker } = e.detail;
       setClientTrackers(prev => {
@@ -268,8 +268,17 @@ export default function AIPracticeHistory() {
     };
 
     window.addEventListener('speaking-submission-tracker', handleTrackerUpdate as EventListener);
+    
+    // Periodic polling for tracker updates from sessionStorage
+    // This catches updates from edge function fire-and-forget calls that may update
+    // sessionStorage after the navigation has occurred
+    const pollInterval = setInterval(() => {
+      checkExistingTrackers();
+    }, 2000); // Poll every 2 seconds for responsive updates
+
     return () => {
       window.removeEventListener('speaking-submission-tracker', handleTrackerUpdate as EventListener);
+      clearInterval(pollInterval);
     };
   }, []);
   useEffect(() => {
