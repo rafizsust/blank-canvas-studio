@@ -620,7 +620,7 @@ export default function AIPracticeHistory() {
 
       toast({
         title: 'Re-evaluation Started',
-        description: 'Re-evaluating your speaking test... This may take 30-60 seconds.',
+        description: 'Re-evaluating your speaking test... This may take a few minutes.',
       });
 
       const response = await supabase.functions.invoke('resubmit-parallel', {
@@ -887,7 +887,9 @@ export default function AIPracticeHistory() {
                 const isPendingEval = pendingEvaluations.has(test.id);
                 const pendingJob = pendingEvaluations.get(test.id);
                 const clientTracker = test.module === 'speaking' ? clientTrackers.get(test.id) : null;
-                const isClientUploading = !!clientTracker && ['preparing', 'converting', 'uploading', 'queuing'].includes(clientTracker.stage);
+                const isClientProgressing =
+                  !!clientTracker &&
+                  ['preparing', 'converting', 'uploading', 'queuing', 'evaluating', 'finalizing'].includes(clientTracker.stage);
                 const isEvaluating = isPendingEval && pendingJob && ['pending', 'processing', 'retrying'].includes(pendingJob.status);
                 
                 // Get timing from database (persisted) 
@@ -910,15 +912,15 @@ export default function AIPracticeHistory() {
                 })();
                 
                 return (
-                  <Card 
-                    key={test.id} 
-                    className={cn(
-                      "overflow-hidden transition-all duration-200",
-                      hasResult && "hover:shadow-md cursor-pointer",
-                      (isPendingEval || isClientUploading) && "ring-1 ring-primary/30"
-                    )}
-                    onClick={() => hasResult && handleViewResults(test)}
-                  >
+                    <Card 
+                     key={test.id} 
+                     className={cn(
+                       "overflow-hidden transition-all duration-200",
+                       hasResult && "hover:shadow-md cursor-pointer",
+                       (isPendingEval || isClientProgressing) && "ring-1 ring-primary/30"
+                     )}
+                     onClick={() => hasResult && handleViewResults(test)}
+                   >
                     <CardContent className="p-0">
                       <div className="flex">
                         {/* Module Color Bar */}
@@ -987,35 +989,38 @@ export default function AIPracticeHistory() {
                                 )}
                               </div>
                               
-                              {/* Status Badges Row */}
-                              {(isEvaluating || isPendingEval || isClientUploading || hasFailedSub || (!hasResult && !isPendingEval && !clientTracker)) && (
-                                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                  {/* Evaluating status with stage */}
-                                  {isEvaluating && pendingJob && (
-                                    <Badge variant="outline" className="gap-1.5 text-xs border-primary/40 text-primary animate-pulse">
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                      {getStageLabel(pendingJob.stage, pendingJob.current_part)}
-                                    </Badge>
-                                  )}
-                                  
-                                  {/* Client uploading status */}
-                                  {isClientUploading && clientTracker && (
-                                    <Badge variant="outline" className="gap-1.5 text-xs border-primary/40 text-primary animate-pulse">
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                      {clientTracker.stage === 'preparing' && 'Preparing...'}
-                                      {clientTracker.stage === 'converting' && 'Converting audio...'}
-                                      {clientTracker.stage === 'uploading' && 'Uploading...'}
-                                      {clientTracker.stage === 'queuing' && 'Queuing...'}
-                                    </Badge>
-                                  )}
-                                  
-                                  {/* Failed/Stale status */}
-                                  {isPendingEval && pendingJob?.status === 'stale' && (
-                                    <Badge variant="outline" className="gap-1 text-xs border-warning/40 text-warning">
-                                      <AlertCircle className="w-3 h-3" />
-                                      Timed Out
-                                    </Badge>
-                                  )}
+                               {/* Status Badges Row */}
+                               {(isEvaluating || isPendingEval || isClientProgressing || hasFailedSub || (!hasResult && !isPendingEval && !clientTracker)) && (
+                                 <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                   {/* Evaluating status with stage (server job) */}
+                                   {isEvaluating && pendingJob && (
+                                     <Badge variant="outline" className="gap-1.5 text-xs border-primary/40 text-primary animate-pulse">
+                                       <Loader2 className="w-3 h-3 animate-spin" />
+                                       {getStageLabel(pendingJob.stage, pendingJob.current_part)}
+                                     </Badge>
+                                   )}
+                                   
+                                   {/* Client-side progress (accuracy/parallel mode or early upload stages) */}
+                                   {!isEvaluating && isClientProgressing && clientTracker && (
+                                     <Badge variant="outline" className="gap-1.5 text-xs border-primary/40 text-primary animate-pulse">
+                                       <Loader2 className="w-3 h-3 animate-spin" />
+                                       {clientTracker.stage === 'preparing' && 'Preparing...'}
+                                       {clientTracker.stage === 'converting' && 'Converting audio...'}
+                                       {clientTracker.stage === 'uploading' && 'Uploading audio...'}
+                                       {clientTracker.stage === 'queuing' && 'Queued'}
+                                       {clientTracker.stage === 'evaluating' && 'Evaluating'}
+                                       {clientTracker.stage === 'finalizing' && 'Finalizing'}
+                                       {clientTracker.detail ? ` — ${clientTracker.detail}` : ''}
+                                     </Badge>
+                                   )}
+                                   
+                                   {/* Failed/Stale status */}
+                                   {isPendingEval && pendingJob?.status === 'stale' && (
+                                     <Badge variant="outline" className="gap-1 text-xs border-warning/40 text-warning">
+                                       <AlertCircle className="w-3 h-3" />
+                                       Timed Out
+                                     </Badge>
+                                   )}
                                   {isPendingEval && pendingJob?.status === 'failed' && (
                                     <Badge variant="outline" className="gap-1 text-xs border-destructive/40 text-destructive">
                                       <AlertCircle className="w-3 h-3" />
