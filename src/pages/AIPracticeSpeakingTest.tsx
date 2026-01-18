@@ -1062,12 +1062,156 @@ export default function AIPracticeSpeakingTest() {
 
       setEvaluationStep(1);
       const totalAudioFiles = keys.length;
+      
+      // Calculate Part 2 fluency flag (needed for both modes)
+      const part2Duration = Object.entries(segments)
+        .filter(([, s]) => s.partNumber === 2)
+        .reduce((acc, [, s]) => acc + (s.duration || 0), 0);
+      const fluencyFlag = part2Duration > 0 && part2Duration < PART2_MIN_SPEAKING;
+      
+      const durations: Record<string, number> = {};
+      for (const key of keys) {
+        durations[key] = segments[key].duration;
+      }
+
+      // =====================================================================
+      // ACCURACY MODE: True parallel processing
+      // - Convert all audio to base64 IN PARALLEL
+      // - Send directly to evaluate-speaking-parallel (skips R2-first upload)
+      // - Edge function handles R2 upload + Google File API upload IN PARALLEL
+      // =====================================================================
+      if (evaluationMode === 'accuracy') {
+        console.log('[AIPracticeSpeakingTest] ACCURACY MODE: Using true parallel processing');
+        setSubmissionProgress({ 
+          step: 'Converting Audio', 
+          detail: `Converting ${totalAudioFiles} audio files in parallel...`, 
+          currentItem: 0, 
+          totalItems: totalAudioFiles 
+        });
+
+        // Convert all audio to MP3 base64 IN PARALLEL
+        const conversionStartTime = Date.now();
+        const conversionPromises = keys.map(async (key) => {
+          const seg = segments[key];
+          const inferredType = seg.chunks?.[0]?.type || 'audio/webm';
+          const blob = new Blob(seg.chunks, { type: inferredType });
+          
+          if (blob.size === 0) {
+            return { key, dataUrl: null, error: 'Empty blob' };
+          }
+          
+          try {
+            const dataUrl = await toMp3DataUrl(blob, key);
+            return { key, dataUrl, error: null };
+          } catch (err) {
+            console.error(`[AIPracticeSpeakingTest] Conversion error for ${key}:`, err);
+            return { key, dataUrl: null, error: err instanceof Error ? err.message : 'Conversion failed' };
+          }
+        });
+
+        const conversionResults = await Promise.all(conversionPromises);
+        const conversionTimeMs = Date.now() - conversionStartTime;
+        console.log(`[AIPracticeSpeakingTest] Parallel conversion completed in ${conversionTimeMs}ms`);
+
+        // Build audioData object for evaluate-speaking-parallel
+        const audioData: Record<string, string> = {};
+        const conversionErrors: Array<{ key: string; error: string }> = [];
+        
+        for (const result of conversionResults) {
+          if (result.dataUrl) {
+            audioData[result.key] = result.dataUrl;
+          } else if (result.error) {
+            conversionErrors.push({ key: result.key, error: result.error });
+          }
+        }
+
+        if (Object.keys(audioData).length === 0) {
+          throw new Error(`All audio conversions failed: ${conversionErrors.map(e => e.key).join(', ')}`);
+        }
+
+        if (conversionErrors.length > 0) {
+          console.warn(`[AIPracticeSpeakingTest] ${conversionErrors.length} conversions failed, continuing with ${Object.keys(audioData).length} files`);
+        }
+
+        setEvaluationStep(2);
+        setSubmissionProgress({ 
+          step: 'Evaluating', 
+          detail: 'Sending audio for parallel evaluation (Google + R2 upload happening simultaneously)...', 
+          currentItem: 0, 
+          totalItems: 0 
+        });
+
+        console.log(`[AIPracticeSpeakingTest] Calling evaluate-speaking-parallel with ${Object.keys(audioData).length} audio segments`);
+        const evaluationStartTime = Date.now();
+
+        const { data, error } = await supabase.functions.invoke('evaluate-speaking-parallel', {
+          body: {
+            testId,
+            audioData,
+            durations,
+            topic: test?.topic,
+            difficulty: test?.difficulty,
+            fluencyFlag,
+          },
+        });
+
+        const evaluationTimeMs = Date.now() - evaluationStartTime;
+
+        if (exitRequestedRef.current || !isMountedRef.current) return;
+
+        if (error) {
+          console.error('[AIPracticeSpeakingTest] Parallel evaluation error:', error);
+          throw new Error(error.message || 'Evaluation failed');
+        }
+
+        if (data?.success && data?.resultId) {
+          const totalTimeMs = conversionTimeMs + evaluationTimeMs;
+          console.log(`[AIPracticeSpeakingTest] ✅ Parallel evaluation complete!`);
+          console.log(`[AIPracticeSpeakingTest] Timing: conversion=${conversionTimeMs}ms, evaluation=${evaluationTimeMs}ms, total=${totalTimeMs}ms`);
+          
+          setEvaluationStep(3);
+          setSubmissionProgress({ 
+            step: 'Complete!', 
+            detail: `Evaluation finished in ${(totalTimeMs / 1000).toFixed(1)}s`, 
+            currentItem: 0, 
+            totalItems: 0 
+          });
+
+          // Delete persisted audio (processed successfully)
+          if (testId) await deleteAudioSegments(testId);
+
+          // Track topic completion
+          if (test?.topic) incrementCompletion(test.topic);
+
+          toast({
+            title: 'Evaluation Complete!',
+            description: `Results ready in ${(totalTimeMs / 1000).toFixed(1)}s. Redirecting to results...`,
+          });
+
+          setPhase('done');
+
+          // Navigate to results
+          if (!exitRequestedRef.current && isMountedRef.current) {
+            await exitFullscreen();
+            navigate(`/ai-practice/speaking/results/${data.resultId}`);
+          }
+        } else if (data?.error) {
+          throw new Error(data.error);
+        } else {
+          throw new Error('Unexpected response from parallel evaluation');
+        }
+        return; // Exit early - accuracy mode complete
+      }
+
+      // =====================================================================
+      // BASIC MODE: Sequential R2 upload then async evaluation (existing flow)
+      // =====================================================================
+      console.log('[AIPracticeSpeakingTest] BASIC MODE: Sequential R2 upload');
       setSubmissionProgress({ step: 'Converting Audio', detail: `Preparing ${totalAudioFiles} audio files for upload...`, currentItem: 0, totalItems: totalAudioFiles });
       console.log('[AIPracticeSpeakingTest] Step 1: Uploading audio files to R2...');
 
       // STEP 1: Upload all audio files to R2
       const filePaths: Record<string, string> = {};
-      const durations: Record<string, number> = {};
       const uploadErrors: Array<{ key: string; error: string }> = [];
 
       for (let i = 0; i < keys.length; i++) {
@@ -1183,11 +1327,7 @@ export default function AIPracticeSpeakingTest() {
       });
       console.log(`[AIPracticeSpeakingTest] Step 2: Calling ASYNC evaluation (${Object.keys(filePaths).length} files)...`);
 
-      // Calculate Part 2 fluency flag
-      const part2Duration = Object.entries(segments)
-        .filter(([, s]) => s.partNumber === 2)
-        .reduce((acc, [, s]) => acc + (s.duration || 0), 0);
-      const fluencyFlag = part2Duration > 0 && part2Duration < PART2_MIN_SPEAKING;
+      // Note: fluencyFlag already calculated at the top of submitTest
 
       // Build transcript data from speech analysis for text-based evaluation
       const transcriptData: Record<string, unknown> = {};
