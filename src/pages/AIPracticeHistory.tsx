@@ -4,6 +4,16 @@ import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToastAction } from '@/components/ui/toast';
@@ -509,6 +519,7 @@ export default function AIPracticeHistory() {
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [parallelResubmitting, setParallelResubmitting] = useState<string | null>(null);
+  const [confirmResubmitTestId, setConfirmResubmitTestId] = useState<string | null>(null);
 
   const handleCancelEvaluation = async (testId: string) => {
     const pendingJob = pendingEvaluations.get(testId);
@@ -760,6 +771,29 @@ export default function AIPracticeHistory() {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Navbar />
+
+      <AlertDialog open={Boolean(confirmResubmitTestId)} onOpenChange={(open) => !open && setConfirmResubmitTestId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-evaluate this speaking test?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will overwrite your previous score/report for this test with a new evaluation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!confirmResubmitTestId) return;
+                void handleResubmit(confirmResubmitTestId);
+                setConfirmResubmitTestId(null);
+              }}
+            >
+              Yes, re-evaluate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       
       <main className="flex-1 py-6 md:py-8">
         <div className="container max-w-4xl mx-auto px-4">
@@ -1062,7 +1096,10 @@ export default function AIPracticeHistory() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  onClick={() => handleResubmit(test.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmResubmitTestId(test.id);
+                                  }}
                                   disabled={parallelResubmitting === test.id}
                                   className="h-8 w-8 text-primary hover:text-primary"
                                   title="Resubmit for re-evaluation"

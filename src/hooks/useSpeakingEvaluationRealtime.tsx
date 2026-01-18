@@ -50,6 +50,7 @@ export function useSpeakingEvaluationRealtime({
   const [lastError, setLastError] = useState<string | null>(null);
   const [latestJobId, setLatestJobId] = useState<string | null>(null);
   const [latestJobUpdatedAt, setLatestJobUpdatedAt] = useState<string | null>(null);
+  const [latestJobCreatedAt, setLatestJobCreatedAt] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
   const [currentPart, setCurrentPart] = useState<number>(0);
   const [totalParts, setTotalParts] = useState<number>(3);
@@ -115,6 +116,7 @@ export function useSpeakingEvaluationRealtime({
 
       setLatestJobId(job.id);
       setLatestJobUpdatedAt(job.updated_at || job.created_at);
+      setLatestJobCreatedAt(job.created_at);
       setJobStatus(job.status as EvaluationJob['status']);
       setJobStage(job.stage || null);
       setRetryCount(job.retry_count || 0);
@@ -386,8 +388,11 @@ export function useSpeakingEvaluationRealtime({
     progress,
     currentPart,
     totalParts,
-    // Job actions
+    // Job metadata (used to decide whether a new evaluation is running)
     latestJobId,
+    latestJobUpdatedAt,
+    latestJobCreatedAt,
+    // Job actions
     cancelJob,
     retryJob,
     isCancelling,

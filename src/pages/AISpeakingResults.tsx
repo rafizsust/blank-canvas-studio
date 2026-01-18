@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
@@ -335,6 +335,7 @@ export default function AISpeakingResults() {
   const [loading, setLoading] = useState(true);
   const [availableParts, setAvailableParts] = useState<number[]>([1, 2, 3]);
   const [expandedParts, setExpandedParts] = useState<Set<number>>(new Set([1, 2, 3]));
+  const mountedAtRef = useRef<number>(Date.now());
 
   // Realtime subscription for async evaluation
   const {
@@ -348,6 +349,7 @@ export default function AISpeakingResults() {
     currentPart,
     totalParts,
     latestJobId,
+    latestJobUpdatedAt,
     cancelJob,
     retryJob,
     isCancelling,
@@ -563,8 +565,19 @@ export default function AISpeakingResults() {
     );
   }
 
-  // Async processing state (ONLY when we truly don't have a result yet)
-  if (!result && isWaiting) {
+  // Async processing state
+  // 1) If there's no result yet and the job is pending/processing
+  // 2) OR if there IS a previous result, but a NEW job has started (retake/resubmit) — show live progress instead of stale score.
+  const hasNewerJobThanResult = Boolean(
+    result?.created_at &&
+      latestJobUpdatedAt &&
+      new Date(latestJobUpdatedAt).getTime() > new Date(result.created_at).getTime()
+  );
+
+  const isBootstrappingJob =
+    !result && !isWaiting && !isFailed && jobStatus === null && Date.now() - mountedAtRef.current < 4000;
+
+  if ((!result && isWaiting) || (result && isWaiting && hasNewerJobThanResult) || isBootstrappingJob) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
@@ -583,8 +596,6 @@ export default function AISpeakingResults() {
       </div>
     );
   }
-
-  // Show failed state
   if (isFailed) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
