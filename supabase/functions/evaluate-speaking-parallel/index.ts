@@ -381,6 +381,9 @@ serve(async (req) => {
     }
 
     // Build segment metadata
+    // IMPORTANT: We must build orderedSegments for *all* audioKeys.
+    // The test payload format can vary (speakingParts vs older part1/part2/part3),
+    // so we cannot drop segments just because we fail to find question metadata.
     const parts = Array.isArray(payload?.speakingParts) ? payload.speakingParts : [];
     const questionById = new Map<string, { partNumber: 1 | 2 | 3; questionNumber: number; questionText: string }>();
     for (const p of parts) {
@@ -397,21 +400,30 @@ serve(async (req) => {
       }
     }
 
-    const segmentMetaByKey = new Map<string, { segmentKey: string; partNumber: 1 | 2 | 3; questionNumber: number; questionText: string }>();
+    const segmentList: Array<{ segmentKey: string; partNumber: 1 | 2 | 3; questionNumber: number; questionText: string; originalIndex: number }> = [];
 
-    for (const segmentKey of audioKeys) {
+    for (let i = 0; i < audioKeys.length; i++) {
+      const segmentKey = audioKeys[i];
+
+      // Segment keys are formatted as: part{1|2|3}-q{questionId}
       const m = String(segmentKey).match(/^part([123])\-q(.+)$/);
-      if (!m) continue;
-      const partNumber = Number(m[1]) as 1 | 2 | 3;
-      const questionId = m[2];
-      const q = questionById.get(questionId);
-      if (!q) continue;
-      segmentMetaByKey.set(segmentKey, { segmentKey, partNumber, questionNumber: q.questionNumber, questionText: q.questionText });
+      const partNumber = (m ? Number(m[1]) : 1) as 1 | 2 | 3;
+      const questionId = m?.[2] ? String(m[2]) : '';
+      const q = questionId ? questionById.get(questionId) : undefined;
+
+      segmentList.push({
+        segmentKey,
+        partNumber,
+        questionNumber: q?.questionNumber ?? i + 1,
+        questionText: q?.questionText ?? `Question for ${segmentKey}`,
+        originalIndex: i,
+      });
     }
 
-    const orderedSegments = Array.from(segmentMetaByKey.values()).sort((a, b) => {
+    const orderedSegments = segmentList.sort((a, b) => {
       if (a.partNumber !== b.partNumber) return a.partNumber - b.partNumber;
-      return a.questionNumber - b.questionNumber;
+      if (a.questionNumber !== b.questionNumber) return a.questionNumber - b.questionNumber;
+      return a.originalIndex - b.originalIndex;
     });
 
     // Build API key queue
