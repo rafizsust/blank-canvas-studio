@@ -331,6 +331,7 @@ export default function AISpeakingResults() {
   const { user, loading: authLoading } = useAuth();
 
   const [result, setResult] = useState<SpeakingResult | null>(null);
+  const [testPayload, setTestPayload] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [availableParts, setAvailableParts] = useState<number[]>([1, 2, 3]);
   const [expandedParts, setExpandedParts] = useState<Set<number>>(new Set([1, 2, 3]));
@@ -338,12 +339,11 @@ export default function AISpeakingResults() {
   // Realtime subscription for async evaluation
   const {
     jobStatus,
-    // jobStage - available for future use
+    jobStage,
     isWaiting,
     isFailed,
     retryCount,
     lastError,
-    // isSubscribed - passed to ProcessingCardSkeleton internally
     progress,
     currentPart,
     totalParts,
@@ -393,8 +393,9 @@ export default function AISpeakingResults() {
       : [1, 2, 3];
 
     setAvailableParts(partsToShow);
-
-    // Try to find the result in ai_practice_results
+    
+    // Store the test payload for question text lookup
+    setTestPayload(testRow?.payload || null);
     // The URL param can be either the test_id OR the result's own id (from parallel mode)
     // First try by test_id, then fallback to id
     let data = null;
@@ -574,6 +575,7 @@ export default function AISpeakingResults() {
             currentPart={currentPart}
             totalParts={totalParts}
             retryCount={retryCount}
+            jobStage={jobStage}
             onCancel={latestJobId ? cancelJob : undefined}
             isCancelling={isCancelling}
           />
@@ -943,6 +945,21 @@ export default function AISpeakingResults() {
                       modelAnswer?: ModelAnswer;
                     }>> = new Map();
 
+                    // Build question lookup map from test payload
+                    const questionLookup = new Map<string, { questionNumber: number; questionText: string }>();
+                    const speakingParts = testPayload?.speakingParts || [];
+                    speakingParts.forEach((part: any) => {
+                      (part?.questions || []).forEach((q: any) => {
+                        const qId = String(q?.id || '');
+                        if (qId) {
+                          questionLookup.set(qId.toLowerCase(), {
+                            questionNumber: Number(q?.question_number || 0),
+                            questionText: String(q?.question_text || '')
+                          });
+                        }
+                      });
+                    });
+
                     // Parse audio URLs to determine part numbers and match with transcripts/model answers
                     allAudioUrls.forEach(([key, url]) => {
                       // Match patterns like "part1-qp1-q1-xxx" or "part1-qxxx"
@@ -954,8 +971,24 @@ export default function AISpeakingResults() {
 
                       // Get transcript using helper function
                       let transcript = getTranscriptForKey(key);
+                      
+                      // Try to get question text from multiple sources:
+                      // 1. Model answer's question field
+                      // 2. Test payload lookup by question ID extracted from segment key
+                      // 3. Fallback to generic label
                       let questionText = matchingModel?.question || '';
                       let questionNumber = matchingModel?.questionNumber || 0;
+                      
+                      // Extract question ID from segment key (e.g., "part1-qp1-q1-d5e0e2e8" -> "d5e0e2e8")
+                      if (!questionText || questionText.match(/^part\d-qp?\d/i)) {
+                        const idMatch = key.match(/part\d-qp?\d-q\d-(.+)$/i) || key.match(/part\d-q(.+)$/i);
+                        const extractedId = idMatch?.[1]?.toLowerCase();
+                        if (extractedId && questionLookup.has(extractedId)) {
+                          const lookup = questionLookup.get(extractedId)!;
+                          questionText = lookup.questionText;
+                          if (!questionNumber) questionNumber = lookup.questionNumber;
+                        }
+                      }
 
                       // Fallback: extract question number from key pattern if not found
                       if (!questionNumber) {

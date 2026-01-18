@@ -788,8 +788,8 @@ export default function AIPracticeHistory() {
       }
 
       toast({
-        title: 'Parallel Mode Started',
-        description: 'Resubmitting with accuracy mode... This may take 30-60 seconds.',
+        title: 'Re-evaluation Started',
+        description: 'Re-evaluating your speaking test... This may take 30-60 seconds.',
       });
 
       const response = await supabase.functions.invoke('resubmit-parallel', {
@@ -814,7 +814,7 @@ export default function AIPracticeHistory() {
         }));
 
         toast({
-          title: `✅ Parallel Mode Complete!`,
+          title: `✅ Re-evaluation Complete!`,
           description: `Band ${data.overallBand?.toFixed(1)} in ${(data.totalTimeMs / 1000).toFixed(1)}s (server) / ${(clientElapsed / 1000).toFixed(1)}s (client)`,
         });
 
@@ -824,10 +824,10 @@ export default function AIPracticeHistory() {
         throw new Error(data.error);
       }
     } catch (err: any) {
-      console.error('[AIPracticeHistory] Parallel resubmission error:', err);
+      console.error('[AIPracticeHistory] Resubmission error:', err);
       toast({
-        title: 'Parallel Mode Failed',
-        description: err.message || 'Failed to resubmit with parallel mode',
+        title: 'Re-evaluation Failed',
+        description: err.message || 'Failed to re-evaluate speaking test',
         variant: 'destructive',
       });
     } finally {
@@ -1374,7 +1374,7 @@ export default function AIPracticeHistory() {
                               </span>
                             </Button>
                           )}
-                          {/* Parallel Mode Resubmit button for speaking tests with completed jobs */}
+                          {/* Resubmit button for speaking tests with completed jobs */}
                           {test.module === 'speaking' && hasResult && !isPendingEval && (
                             <Button
                               variant="outline"
@@ -1382,7 +1382,7 @@ export default function AIPracticeHistory() {
                               onClick={() => handleParallelResubmit(test.id)}
                               disabled={parallelResubmitting === test.id}
                               className="gap-1 border-primary/50 text-primary hover:bg-primary/10"
-                              title="Resubmit using parallel accuracy mode (uses stored audio)"
+                              title="Re-evaluate using AI (uses stored audio)"
                             >
                               {parallelResubmitting === test.id ? (
                                 <>
@@ -1390,10 +1390,10 @@ export default function AIPracticeHistory() {
                                   <Timer className="w-3 h-3" />
                                 </>
                               ) : (
-                                <Zap className="w-4 h-4" />
+                                <RotateCcw className="w-4 h-4" />
                               )}
                               <span className="hidden sm:inline">
-                                {parallelResubmitting === test.id ? 'Evaluating...' : 'Parallel Mode'}
+                                {parallelResubmitting === test.id ? 'Evaluating...' : 'Resubmit'}
                               </span>
                             </Button>
                           )}
