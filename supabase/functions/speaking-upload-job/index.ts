@@ -261,8 +261,15 @@ serve(async (req) => {
 
       const mimeType = getMimeTypeFromExtension(r2Path);
       
-      // Convert to base64
-      const base64 = btoa(String.fromCharCode(...downloadResult.bytes));
+      // Convert to base64 using chunked approach to avoid stack overflow
+      const bytes = downloadResult.bytes;
+      let binary = '';
+      const chunkSize = 32768; // 32KB chunks
+      for (let j = 0; j < bytes.length; j += chunkSize) {
+        const chunk = bytes.subarray(j, Math.min(j + chunkSize, bytes.length));
+        binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+      }
+      const base64 = btoa(binary);
 
       inlineAudioData[segment.segmentKey] = {
         base64,
