@@ -25,6 +25,11 @@ import {
   TIMINGS,
 } from "../_shared/keyPoolManager.ts";
 
+// Declare EdgeRuntime for Supabase Edge Functions
+declare const EdgeRuntime: {
+  waitUntil: (promise: Promise<unknown>) => void;
+} | undefined;
+
 /**
  * Speaking Evaluate Job - V2 with Per-Part Key Rotation
  * 
@@ -499,23 +504,47 @@ serve(async (req) => {
               last_error: `Transient error (will retry): ${errMsg.slice(0, 150)}`,
               lock_token: null,
               lock_expires_at: null,
+              heartbeat_at: new Date().toISOString(), // Keep heartbeat fresh
               updated_at: new Date().toISOString(),
             })
             .eq('id', jobId);
           
           console.log(`[speaking-evaluate-job] Transient error, re-queued for retry`);
           
-          // Schedule retry in 5 seconds
-          setTimeout(() => {
-            fetch(`${supabaseUrl}/functions/v1/speaking-evaluate-job`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${supabaseServiceKey}`,
-              },
-              body: JSON.stringify({ jobId }),
-            }).catch(e => console.error(`[speaking-evaluate-job] Retry trigger failed:`, e));
-          }, 5000);
+          // CRITICAL: Use EdgeRuntime.waitUntil for reliable background trigger
+          const triggerRetry = async () => {
+            await sleep(5000); // Wait 5s before retry
+            
+            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
+            
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                const response = await fetch(functionUrl, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${supabaseServiceKey}`,
+                  },
+                  body: JSON.stringify({ jobId }),
+                });
+                
+                if (response.ok) {
+                  console.log(`[speaking-evaluate-job] Retry triggered successfully (attempt ${attempt})`);
+                  return;
+                }
+              } catch (e) {
+                console.warn(`[speaking-evaluate-job] Retry attempt ${attempt} error:`, e);
+              }
+              
+              if (attempt < 3) await sleep(2000);
+            }
+          };
+
+          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+            EdgeRuntime.waitUntil(triggerRetry());
+          } else {
+            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
+          }
           
           return new Response(JSON.stringify({ 
             success: false, 
@@ -572,13 +601,11 @@ serve(async (req) => {
     });
 
     if (remainingParts.length > 0) {
-      // More parts to process - apply inter-part delay then trigger next iteration
+      // More parts to process - schedule next iteration with delay
       console.log(`[speaking-evaluate-job] ${remainingParts.length} parts remaining`);
       
-      // Apply mandatory inter-part delay for RPM quota reset
-      if (currentPartNumber) {
-        await interPartDelay(currentPartNumber);
-      }
+      // Calculate when the next part can run (inter-part delay for RPM quota reset)
+      const nextRunAt = new Date(Date.now() + TIMINGS.INTER_PART_DELAY_SEC * 1000).toISOString();
       
       await supabaseService
         .from('speaking_evaluation_jobs')
@@ -588,26 +615,65 @@ serve(async (req) => {
           partial_results: partialResults,
           lock_token: null,
           lock_expires_at: null,
+          heartbeat_at: new Date().toISOString(), // Keep heartbeat fresh so watchdog doesn't reset prematurely
           updated_at: new Date().toISOString(),
         })
         .eq('id', jobId);
 
-      // Trigger next iteration
-      const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
-      fetch(functionUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-        },
-        body: JSON.stringify({ jobId }),
-      }).catch(e => console.warn('Failed to trigger next iteration:', e));
+      console.log(`[speaking-evaluate-job] Job ${jobId} updated to pending, scheduling next iteration after ${TIMINGS.INTER_PART_DELAY_SEC}s`);
+
+      // CRITICAL: Use EdgeRuntime.waitUntil() to ensure trigger completes even after response is sent
+      // This prevents the edge function shutdown from killing the trigger
+      const triggerNextPart = async () => {
+        // Wait for inter-part delay
+        await sleep(TIMINGS.INTER_PART_DELAY_SEC * 1000);
+        
+        const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
+        
+        // Try multiple times to ensure trigger succeeds
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const response = await fetch(functionUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({ jobId }),
+            });
+            
+            if (response.ok) {
+              console.log(`[speaking-evaluate-job] Next iteration triggered successfully (attempt ${attempt})`);
+              return;
+            }
+            
+            console.warn(`[speaking-evaluate-job] Trigger attempt ${attempt} failed with status ${response.status}`);
+          } catch (e) {
+            console.warn(`[speaking-evaluate-job] Trigger attempt ${attempt} error:`, e);
+          }
+          
+          if (attempt < 3) {
+            await sleep(2000); // Wait 2s before retry
+          }
+        }
+        
+        console.error(`[speaking-evaluate-job] All trigger attempts failed for job ${jobId}`);
+      };
+
+      // Use EdgeRuntime.waitUntil if available (Supabase Edge Runtime), otherwise fire-and-forget
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+        EdgeRuntime.waitUntil(triggerNextPart());
+      } else {
+        // Fallback: fire and don't await (less reliable but still works in many cases)
+        triggerNextPart().catch(e => console.error('[speaking-evaluate-job] Background trigger failed:', e));
+      }
 
       return new Response(JSON.stringify({ 
         success: true, 
         status: 'partial',
         progress: Math.round(((actualTotalParts - remainingParts.length) / actualTotalParts) * 100),
         remainingParts,
+        nextRunAt,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

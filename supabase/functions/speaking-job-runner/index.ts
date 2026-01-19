@@ -13,6 +13,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
  * - Periodically via cron (every 1-2 minutes)
  * - By frontend when user wants to retry
  * - After evaluate-speaking-async creates a job
+ * - Automatically by the frontend when jobs appear stuck (> 90s without update)
  */
 
 const corsHeaders = {
@@ -22,10 +23,16 @@ const corsHeaders = {
 };
 
 // How old a heartbeat can be before we consider the job stuck (in seconds)
-const STALE_HEARTBEAT_SECONDS = 120; // 2 minutes
+// Reduced from 120s to 90s for faster recovery
+const STALE_HEARTBEAT_SECONDS = 90;
 
 // Maximum jobs to process per run
-const MAX_JOBS_PER_RUN = 5;
+const MAX_JOBS_PER_RUN = 10;
+
+// Declare EdgeRuntime for Supabase Edge Functions
+declare const EdgeRuntime: {
+  waitUntil: (promise: Promise<unknown>) => void;
+} | undefined;
 
 serve(async (req) => {
   console.log(`[speaking-job-runner] Request at ${new Date().toISOString()}`);
@@ -165,22 +172,44 @@ serve(async (req) => {
 
           console.log(`[speaking-job-runner] Dispatching job ${job.id} to ${functionName}`);
 
-          // Fire and forget - use await to ensure we trigger it properly
-          const functionUrl = `${supabaseUrl}/functions/v1/${functionName}`;
-          const triggerResponse = await fetch(functionUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${supabaseServiceKey}`,
-            },
-            body: JSON.stringify({ jobId: job.id }),
-          });
+          // Use EdgeRuntime.waitUntil if available for reliable background dispatch
+          const dispatchJob = async () => {
+            const functionUrl = `${supabaseUrl}/functions/v1/${functionName}`;
+            
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                const triggerResponse = await fetch(functionUrl, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${supabaseServiceKey}`,
+                  },
+                  body: JSON.stringify({ jobId: job.id }),
+                });
 
-          console.log(`[speaking-job-runner] ${functionName} triggered for ${job.id}, status: ${triggerResponse.status}`);
-          
-          if (!triggerResponse.ok) {
-            const errorText = await triggerResponse.text().catch(() => 'Unknown');
-            console.error(`[speaking-job-runner] ${functionName} trigger failed for ${job.id}: ${errorText}`);
+                console.log(`[speaking-job-runner] ${functionName} triggered for ${job.id}, status: ${triggerResponse.status}`);
+                
+                if (triggerResponse.ok) {
+                  return;
+                }
+                
+                const errorText = await triggerResponse.text().catch(() => 'Unknown');
+                console.error(`[speaking-job-runner] ${functionName} trigger attempt ${attempt} failed for ${job.id}: ${errorText}`);
+              } catch (fetchErr: any) {
+                console.error(`[speaking-job-runner] ${functionName} trigger attempt ${attempt} error for ${job.id}:`, fetchErr.message);
+              }
+              
+              if (attempt < 3) {
+                await new Promise(r => setTimeout(r, 2000)); // Wait 2s before retry
+              }
+            }
+          };
+
+          // Fire dispatch - use waitUntil if available for reliability
+          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+            EdgeRuntime.waitUntil(dispatchJob());
+          } else {
+            await dispatchJob();
           }
 
           results.jobsDispatched++;

@@ -475,6 +475,62 @@ export default function AIPracticeHistory() {
     };
   }, [user]);
 
+  // Auto-kick watchdog for stale jobs
+  // If a job hasn't been updated in > 90 seconds, automatically kick the watchdog
+  const kickedJobsRef = useRef<Set<string>>(new Set());
+  
+  useEffect(() => {
+    if (!user) return;
+    
+    const STALE_THRESHOLD_MS = 90 * 1000; // 90 seconds - matches backend STALE_HEARTBEAT_SECONDS
+    
+    const checkForStaleJobs = async () => {
+      const now = Date.now();
+      
+      for (const [_testId, job] of pendingEvaluations.entries()) {
+        // Only check pending/processing jobs
+        if (job.status !== 'pending' && job.status !== 'processing') continue;
+        
+        // Skip if we already kicked this job recently
+        if (kickedJobsRef.current.has(job.id)) continue;
+        
+        // Check if job is stale (no update for > threshold)
+        const lastUpdate = job.updated_at 
+          ? new Date(job.updated_at).getTime()
+          : new Date(job.created_at).getTime();
+        
+        const timeSinceUpdate = now - lastUpdate;
+        
+        if (timeSinceUpdate > STALE_THRESHOLD_MS) {
+          console.log(`[AIPracticeHistory] Job ${job.id} appears stale (${Math.round(timeSinceUpdate / 1000)}s since update), kicking watchdog...`);
+          
+          // Mark as kicked to avoid duplicate kicks
+          kickedJobsRef.current.add(job.id);
+          
+          try {
+            await supabase.functions.invoke('speaking-job-runner', {
+              body: { jobId: job.id },
+            });
+            console.log(`[AIPracticeHistory] Watchdog kicked successfully for job ${job.id}`);
+          } catch (err) {
+            console.warn(`[AIPracticeHistory] Failed to kick watchdog for job ${job.id}:`, err);
+          }
+          
+          // Allow re-kick after 2 minutes
+          setTimeout(() => {
+            kickedJobsRef.current.delete(job.id);
+          }, 120000);
+        }
+      }
+    };
+    
+    // Check immediately and every 30 seconds
+    checkForStaleJobs();
+    const interval = setInterval(checkForStaleJobs, 30000);
+    
+    return () => clearInterval(interval);
+  }, [user, pendingEvaluations]);
+
   const handleDelete = async (testId: string) => {
     if (!user) return;
     setDeletingId(testId);
