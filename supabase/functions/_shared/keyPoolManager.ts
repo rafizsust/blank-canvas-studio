@@ -63,6 +63,8 @@ export interface ErrorClassification {
  * Checkout an API key for a specific speaking part.
  * Uses atomic database function to prevent race conditions.
  * 
+ * @param skipUserKey - If true, skip user's own key and go straight to admin pool.
+ *                      Use this when user key has been marked exhausted.
  * @returns KeyCheckoutResult if a key is available, null otherwise
  */
 export async function checkoutKeyForPart(
@@ -74,19 +76,25 @@ export async function checkoutKeyForPart(
   options?: { 
     lockDurationSec?: number; 
     modelName?: string;
+    skipUserKey?: boolean;  // NEW: skip user key if it's exhausted
   }
 ): Promise<KeyCheckoutResult | null> {
   const lockDuration = options?.lockDurationSec ?? TIMINGS.KEY_LOCK_DURATION_SEC;
   const modelName = options?.modelName ?? 'gemini-2.5-flash';
+  const skipUserKey = options?.skipUserKey ?? false;
   
-  console.log(`[keyPoolManager] Checking out key for job ${jobId?.slice(0, 8)}... part ${partNumber}`);
+  console.log(`[keyPoolManager] Checking out key for job ${jobId?.slice(0, 8)}... part ${partNumber}${skipUserKey ? ' (skipping user key)' : ''}`);
   
   // PRIORITY 1: Try user's own key first (no locking needed)
-  if (appEncryptionKey) {
-    const userKey = await tryGetUserKey(supabaseService, userId, appEncryptionKey);
-    if (userKey) {
+  // Skip if explicitly told to (e.g., user key is exhausted)
+  if (appEncryptionKey && !skipUserKey) {
+    const userKeyResult = await tryGetUserKey(supabaseService, userId, appEncryptionKey, modelName);
+    if (userKeyResult.key) {
       console.log(`[keyPoolManager] Using user's own API key`);
-      return { keyId: 'user', keyValue: userKey, isUserKey: true };
+      return { keyId: 'user', keyValue: userKeyResult.key, isUserKey: true };
+    }
+    if (userKeyResult.exhausted) {
+      console.log(`[keyPoolManager] User's key is exhausted for ${modelName}, falling back to admin pool`);
     }
   }
   
@@ -109,7 +117,7 @@ export async function checkoutKeyForPart(
   }
   
   const key = keyRows[0];
-  console.log(`[keyPoolManager] Checked out key ${key.key_id?.slice(0, 8)}... for part ${partNumber}`);
+  console.log(`[keyPoolManager] Checked out admin key ${key.key_id?.slice(0, 8)}... for part ${partNumber}`);
   
   return {
     keyId: key.key_id,
@@ -198,6 +206,10 @@ export async function resetKeyRateLimit(
 /**
  * Classify an error to determine the appropriate response.
  * 
+ * IMPORTANT: Check daily quota FIRST because the error message often contains
+ * both "429" and "quota exceeded". We want to classify these as daily_quota,
+ * not rate_limit, because they need different handling (24h cooldown vs 5min).
+ * 
  * @returns Classification with recommended action
  */
 export function classifyError(error: any): ErrorClassification {
@@ -205,9 +217,39 @@ export function classifyError(error: any): ErrorClassification {
   const status = error?.status || error?.error?.status || '';
   
   // ========================================
+  // DAILY QUOTA EXHAUSTION (CHECK FIRST!)
+  // ========================================
+  // These indicate the key's daily limit is exceeded.
+  // The message often includes "429" AND "quota exceeded" - we want to catch
+  // "quota exceeded" first because it requires 24h cooldown, not 5min.
+  // Action: Mark key exhausted for the day, switch key
+  if (
+    msg.includes('exceeded your current quota') ||  // Google's exact message
+    msg.includes('quota exceeded') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('daily') ||
+    msg.includes('per day') ||
+    msg.includes('day limit') ||
+    msg.includes('24 hours') ||
+    msg.includes('check your plan') ||
+    msg.includes('billing') ||
+    msg.includes('limit: 0')
+  ) {
+    return {
+      type: 'daily_quota',
+      cooldownMinutes: TIMINGS.DAILY_QUOTA_COOLDOWN_MIN,
+      shouldRetry: false,
+      shouldSwitchKey: true,
+      description: 'Daily quota exhausted. Key marked for 24h cooldown.',
+    };
+  }
+  
+  // ========================================
   // RATE LIMIT ERRORS (429, TPM, RPM)
   // ========================================
   // These are per-minute/per-request limits, NOT daily quotas.
+  // Only reaches here if it's NOT a quota exhaustion error.
   // Action: Switch key immediately, NO retry with same key
   if (
     msg.includes('429') ||
@@ -227,30 +269,6 @@ export function classifyError(error: any): ErrorClassification {
       shouldRetry: false,  // NO retry with same key!
       shouldSwitchKey: true,
       description: 'Rate limit hit (RPM/TPM). Switching to different key.',
-    };
-  }
-  
-  // ========================================
-  // DAILY QUOTA EXHAUSTION
-  // ========================================
-  // These indicate the key's daily limit is exceeded.
-  // Action: Mark key exhausted for the day, switch key
-  if (
-    msg.includes('daily') ||
-    msg.includes('per day') ||
-    msg.includes('day limit') ||
-    msg.includes('24 hours') ||
-    msg.includes('check your plan') ||
-    msg.includes('billing') ||
-    msg.includes('limit: 0') ||
-    (msg.includes('quota') && msg.includes('exceeded'))
-  ) {
-    return {
-      type: 'daily_quota',
-      cooldownMinutes: TIMINGS.DAILY_QUOTA_COOLDOWN_MIN,
-      shouldRetry: false,
-      shouldSwitchKey: true,
-      description: 'Daily quota exhausted. Key marked for 24h cooldown.',
     };
   }
   
@@ -335,14 +353,88 @@ export async function interPartDelay(partNumber: number): Promise<void> {
 }
 
 /**
- * Try to get user's own API key
+ * Mark a USER's key as having exhausted its quota for a model.
+ * This uses the user_secrets table to track exhaustion state.
+ */
+export async function markUserKeyQuotaExhausted(
+  supabaseService: any,
+  userId: string,
+  modelName: string
+): Promise<void> {
+  const today = new Date().toISOString().split('T')[0];
+  const secretName = `GEMINI_API_KEY_EXHAUSTED_${modelName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}`;
+  
+  console.log(`[keyPoolManager] Marking user ${userId.slice(0, 8)}...'s key as exhausted for ${modelName}`);
+  
+  try {
+    // Upsert an exhaustion marker for this user/model
+    await supabaseService
+      .from('user_secrets')
+      .upsert({
+        user_id: userId,
+        secret_name: secretName,
+        encrypted_value: today, // Just store the date, not encrypted
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'user_id,secret_name',
+      });
+  } catch (e) {
+    console.warn(`[keyPoolManager] Failed to mark user key exhausted:`, e);
+  }
+}
+
+/**
+ * Check if user's key is exhausted for a model today.
+ */
+async function isUserKeyExhausted(
+  supabaseService: any,
+  userId: string,
+  modelName: string
+): Promise<boolean> {
+  const today = new Date().toISOString().split('T')[0];
+  const secretName = `GEMINI_API_KEY_EXHAUSTED_${modelName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}`;
+  
+  try {
+    const { data } = await supabaseService
+      .from('user_secrets')
+      .select('encrypted_value')
+      .eq('user_id', userId)
+      .eq('secret_name', secretName)
+      .maybeSingle();
+    
+    if (data?.encrypted_value === today) {
+      return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+interface UserKeyResult {
+  key: string | null;
+  exhausted: boolean;
+}
+
+/**
+ * Try to get user's own API key.
+ * Also checks if the key is exhausted for the given model today.
  */
 async function tryGetUserKey(
   supabaseService: any,
   userId: string,
-  appEncryptionKey: string
-): Promise<string | null> {
+  appEncryptionKey: string,
+  modelName?: string
+): Promise<UserKeyResult> {
   try {
+    // First check if the key is exhausted for this model today
+    if (modelName) {
+      const exhausted = await isUserKeyExhausted(supabaseService, userId, modelName);
+      if (exhausted) {
+        return { key: null, exhausted: true };
+      }
+    }
+    
     const { data: userSecret } = await supabaseService
       .from('user_secrets')
       .select('encrypted_value')
@@ -350,7 +442,7 @@ async function tryGetUserKey(
       .eq('secret_name', 'GEMINI_API_KEY')
       .maybeSingle();
     
-    if (!userSecret?.encrypted_value) return null;
+    if (!userSecret?.encrypted_value) return { key: null, exhausted: false };
     
     // Decrypt using AES-GCM
     const { crypto } = await import("https://deno.land/std@0.168.0/crypto/mod.ts");
@@ -370,9 +462,9 @@ async function tryGetUserKey(
       cryptoKey,
       bytes.slice(12)
     );
-    return decoder.decode(decrypted);
+    return { key: decoder.decode(decrypted), exhausted: false };
   } catch (e) {
     console.warn(`[keyPoolManager] Failed to get user key:`, e);
-    return null;
+    return { key: null, exhausted: false };
   }
 }

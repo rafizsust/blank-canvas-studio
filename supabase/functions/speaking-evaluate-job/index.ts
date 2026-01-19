@@ -19,6 +19,7 @@ import {
   releaseKeyWithCooldown,
   markKeyRateLimited,
   resetKeyRateLimit,
+  markUserKeyQuotaExhausted,
   classifyError,
   interPartDelay,
   sleep,
@@ -475,17 +476,120 @@ serve(async (req) => {
           // Release the lock and re-queue for retry with different key
           await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
           
-          throw new Error(`Rate limit hit. Key ${currentKeyId?.slice(0, 8)}... marked for cooldown. Will retry with different key.`);
+          // For rate limit, re-queue the job to try with a different key
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({
+              status: 'pending',
+              stage: 'pending_eval',
+              last_error: `Rate limit hit (will retry with different key): ${errMsg.slice(0, 100)}`,
+              lock_token: null,
+              lock_expires_at: null,
+              heartbeat_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', jobId);
+          
+          console.log(`[speaking-evaluate-job] Rate limit, re-queued for retry with different key`);
+          
+          // Trigger retry with different key
+          const triggerRetry = async () => {
+            await sleep(3000); // Short delay before retry
+            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
+            try {
+              await fetch(functionUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${supabaseServiceKey}`,
+                },
+                body: JSON.stringify({ jobId }),
+              });
+              console.log(`[speaking-evaluate-job] Retry triggered after rate limit`);
+            } catch (e) {
+              console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
+            }
+          };
+          
+          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+            EdgeRuntime.waitUntil(triggerRetry());
+          } else {
+            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
+          }
+          
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: 'Rate limit, retrying with different key',
+            retrying: true,
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
         }
 
         if (errorClass.type === 'daily_quota') {
           // Mark key as exhausted for the day
-          if (!isUserKey && currentKeyId) {
+          if (isUserKey) {
+            // CRITICAL: Mark user's key as exhausted so we fallback to admin keys
+            await markUserKeyQuotaExhausted(supabaseService, userId, GEMINI_MODEL);
+            console.log(`[speaking-evaluate-job] User key marked as exhausted, will retry with admin keys`);
+          } else if (currentKeyId) {
             await markModelQuotaExhausted(supabaseService, currentKeyId, GEMINI_MODEL);
           }
           await perfLogger.logQuotaExceeded(GEMINI_MODEL, errMsg.slice(0, 100), currentKeyId !== 'user' ? currentKeyId : undefined);
           
-          throw new Error(`Daily quota exhausted for key ${currentKeyId?.slice(0, 8)}...`);
+          // Release the lock and re-queue for retry with different key
+          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
+          
+          // Re-queue the job to try with a different key (admin key if user key was exhausted)
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({
+              status: 'pending',
+              stage: 'pending_eval',
+              last_error: `Quota exhausted (will retry with different key): ${errMsg.slice(0, 100)}`,
+              lock_token: null,
+              lock_expires_at: null,
+              heartbeat_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', jobId);
+          
+          console.log(`[speaking-evaluate-job] Daily quota exhausted, re-queued for retry with different key`);
+          
+          // Trigger retry with different key
+          const triggerRetry = async () => {
+            await sleep(3000); // Short delay before retry
+            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
+            try {
+              await fetch(functionUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${supabaseServiceKey}`,
+                },
+                body: JSON.stringify({ jobId }),
+              });
+              console.log(`[speaking-evaluate-job] Retry triggered after quota exhaustion`);
+            } catch (e) {
+              console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
+            }
+          };
+          
+          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+            EdgeRuntime.waitUntil(triggerRetry());
+          } else {
+            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
+          }
+          
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: 'Daily quota exhausted, retrying with different key',
+            retrying: true,
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
         }
 
         // Handle transient errors (503, timeouts, etc.) - allow retry
