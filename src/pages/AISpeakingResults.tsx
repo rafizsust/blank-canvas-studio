@@ -15,6 +15,7 @@ import { AddToFlashcardButton } from '@/components/common/AddToFlashcardButton';
 import { InlineProgressBanner } from '@/components/common/InlineProgressBanner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { SpeakingResultsSkeleton } from '@/components/speaking/SpeakingResultsSkeleton';
+import {
   Mic,
   RotateCcw,
   Home,
@@ -343,7 +344,6 @@ export default function AISpeakingResults() {
     jobStage,
     isWaiting,
     isFailed,
-    retryCount,
     lastError,
     progress,
     currentPart,
