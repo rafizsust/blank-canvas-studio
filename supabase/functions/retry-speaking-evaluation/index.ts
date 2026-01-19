@@ -24,11 +24,12 @@ const corsHeaders = {
 
 // How long a job can be "processing" before considered stale
 const STALE_THRESHOLD_SECONDS = 90; // Edge functions timeout at ~60s
-const MAX_RETRIES = 5;
+// MAX_RETRIES for automatic/cron retries only - manual retries are unlimited
+const AUTO_MAX_RETRIES = 5;
 
-// Helper to check if job has exhausted all retries
-const hasExhaustedRetries = (job: any): boolean => {
-  return (job.retry_count || 0) >= MAX_RETRIES;
+// Helper to check if job has exhausted auto-retries (only applies to automatic retries)
+const hasExhaustedAutoRetries = (job: any): boolean => {
+  return (job.retry_count || 0) >= AUTO_MAX_RETRIES;
 };
 
 serve(async (req) => {
@@ -63,17 +64,21 @@ serve(async (req) => {
       .select('*');
 
     if (specificJobId) {
-      // Manual retry of specific job - check if it hasn't exhausted retries
+      // Manual retry of specific job - NO LIMIT for manual retries
+      // Users can retry as many times as they want
       query = query.eq('id', specificJobId);
     } else {
-      // Cron job: find stale/stuck jobs that haven't exhausted retries
+      // Cron job: find stale/stuck jobs that haven't exhausted auto-retries
       query = query
         .or(`status.eq.processing,status.eq.pending,status.eq.stale`)
         .lt('updated_at', staleThreshold)
-        .lt('retry_count', MAX_RETRIES)
+        .lt('retry_count', AUTO_MAX_RETRIES)
         .order('created_at', { ascending: true })
         .limit(3); // Process max 3 jobs per cron run
     }
+
+    // Flag to identify if this is a manual retry (no retry limit)
+    const isManualRetry = !!specificJobId;
 
     const { data: stuckJobs, error: queryError } = await query;
 
@@ -105,19 +110,20 @@ serve(async (req) => {
       try {
         const currentRetryCount = job.retry_count || 0;
         
-        // Check if already at max retries - mark as permanently failed
-        if (hasExhaustedRetries(job)) {
-          console.log(`[retry-speaking-evaluation] Job ${job.id} has exhausted all ${MAX_RETRIES} retries, marking as failed`);
+        // For AUTOMATIC retries (cron), check if exhausted - mark as permanently failed
+        // For MANUAL retries (user-initiated), always allow retry regardless of count
+        if (!isManualRetry && hasExhaustedAutoRetries(job)) {
+          console.log(`[retry-speaking-evaluation] Job ${job.id} has exhausted all ${AUTO_MAX_RETRIES} auto-retries, marking as failed`);
           await supabaseService
             .from('speaking_evaluation_jobs')
             .update({
               status: 'failed',
               stage: 'failed',
-              last_error: `Evaluation failed after ${MAX_RETRIES} attempts. Please try generating a new test or contact support.`,
+              last_error: `Automatic retries exhausted after ${AUTO_MAX_RETRIES} attempts. Click retry to try again manually.`,
               updated_at: new Date().toISOString(),
             })
             .eq('id', job.id);
-          results.push({ jobId: job.id, status: 'failed', message: `Max retries (${MAX_RETRIES}) exhausted` });
+          results.push({ jobId: job.id, status: 'failed', message: `Auto-retries (${AUTO_MAX_RETRIES}) exhausted - manual retry still available` });
           continue;
         }
 
@@ -138,7 +144,9 @@ serve(async (req) => {
             retry_count: currentRetryCount + 1,
             lock_token: null,
             lock_expires_at: null,
-            last_error: `Retry ${currentRetryCount + 1}/${MAX_RETRIES}: ${job.last_error || 'Unknown error'}`,
+            last_error: isManualRetry 
+              ? `Manual retry #${currentRetryCount + 1}: ${job.last_error || 'Unknown error'}`
+              : `Auto-retry ${currentRetryCount + 1}/${AUTO_MAX_RETRIES}: ${job.last_error || 'Unknown error'}`,
             updated_at: new Date().toISOString(),
           })
           .eq('id', job.id);
@@ -149,7 +157,7 @@ serve(async (req) => {
           continue;
         }
         
-        console.log(`[retry-speaking-evaluation] Retry attempt ${currentRetryCount + 1}/${MAX_RETRIES} for job ${job.id}, triggering ${targetFunction}`);
+        console.log(`[retry-speaking-evaluation] ${isManualRetry ? 'Manual' : 'Auto'} retry attempt ${currentRetryCount + 1} for job ${job.id}, triggering ${targetFunction}`);
 
         // Directly trigger the appropriate stage function
         const triggerResponse = await fetch(`${supabaseUrl}/functions/v1/${targetFunction}`, {

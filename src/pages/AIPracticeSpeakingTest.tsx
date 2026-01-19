@@ -122,7 +122,8 @@ export default function AIPracticeSpeakingTest() {
   const [selectedAccent, setSelectedAccent] = useState<AccentCode>('en-GB');
   
   // Evaluation mode: 'basic' (text-based) or 'accuracy' (audio-based)
-  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>('basic');
+  // Default to 'accuracy' to match MicrophoneTest default - more reliable evaluation
+  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>('accuracy');
   
   // Shared audio for presets (instructions, transitions, endings - fetched from speaking_shared_audio table)
   const [sharedAudio, setSharedAudio] = useState<Record<string, { audio_url: string | null; fallback_text: string }>>({});

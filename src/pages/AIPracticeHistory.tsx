@@ -667,12 +667,6 @@ export default function AIPracticeHistory() {
         return;
       }
 
-      // Just show that we started - actual progress will come from realtime
-      toast({
-        title: 'Re-evaluation Started',
-        description: 'Processing your speaking test...',
-      });
-
       const response = await supabase.functions.invoke('resubmit-parallel', {
         body: { testId, evaluationMode },
       });
@@ -683,13 +677,18 @@ export default function AIPracticeHistory() {
 
       const data = response.data;
       
-      if (data?.success) {
+      // The resubmit-parallel function now queues the job asynchronously
+      // Navigate to results page to show real-time progress
+      if (data?.queued || data?.success) {
         toast({
-          title: '🎉 Re-evaluation Complete!',
-          description: `Band ${data.overallBand?.toFixed(1)} - Took ${formatDuration(data.totalTimeMs || 0)}`,
+          title: 'Re-evaluation Queued',
+          description: 'Processing your speaking test. Redirecting to results...',
         });
 
-        // Reload tests to show updated results
+        // Navigate to results page where the realtime hook will show progress
+        navigate(`/ai-practice/speaking/results/${testId}`);
+        
+        // Reload tests to update state
         loadTests();
         loadPendingEvaluations();
       } else if (data?.error) {
