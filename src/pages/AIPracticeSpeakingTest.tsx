@@ -1405,11 +1405,13 @@ export default function AIPracticeSpeakingTest() {
     setQuestionIndex(0);
     const part3 = speakingPartsRef.current.part3;
     
-    if (part3) {
+    if (part3 && part3.questions && part3.questions.length > 0) {
       setPhase('part3_intro');
       // Use shared audio key for Part 3 intro (presets use pre-recorded audio)
       speakText(part3.instruction, 'part3_intro');
     } else {
+      // No valid Part 3 questions - end the test
+      console.warn('[AIPracticeSpeakingTest] Part 3 has no questions - ending test');
       endTest();
     }
   };
@@ -1599,6 +1601,10 @@ export default function AIPracticeSpeakingTest() {
       if (part3?.questions?.[0]) {
         setPhase('part3_question');
         speakText(part3.questions[0].question_text, getQuestionAudioKey(3, 0));
+      } else {
+        // No Part 3 questions available - end the test to avoid blank screen
+        console.warn('[AIPracticeSpeakingTest] Part 3 intro complete but no questions - ending test');
+        endTest();
       }
     } else if (currentPhase === 'part3_question') {
       // Start recording for Part 3
@@ -1625,10 +1631,22 @@ export default function AIPracticeSpeakingTest() {
         return;
       }
       
-      // BASIC MODE: Submit now (synchronous flow)
-      // Or fallback if parallel submission hasn't started yet for some reason
-      console.log('[AIPracticeSpeakingTest] Ending audio complete - submitting test (basic mode)');
-      submitTest();
+      // BASIC MODE or accuracy mode when submission hasn't started yet
+      // Submit and navigate immediately after ending audio completes
+      console.log('[AIPracticeSpeakingTest] Ending audio complete - submitting test');
+      // For accuracy mode without pending navigation, trigger immediate navigation after submit
+      if (evaluationMode === 'accuracy') {
+        // For accuracy mode, start submission in background and navigate immediately
+        // to avoid the delay before redirect
+        submitTest();
+        setPhase('done');
+        exitFullscreen().then(() => {
+          navigate('/ai-practice/history');
+        });
+      } else {
+        // Basic mode - wait for submission to complete before showing UI
+        submitTest();
+      }
     }
   };
 
