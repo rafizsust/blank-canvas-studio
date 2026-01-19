@@ -1014,10 +1014,18 @@ function buildPartPrompt(
     `AUDIO_${idx}: "${seg.segmentKey}" → Question ${seg.questionNumber}: "${seg.questionText}"`
   ).join('\n');
 
+  // STRICT word limits for model answers
+  const modelAnswerWordLimits: Record<number, { min: number; max: number; target: number }> = {
+    1: { min: 30, max: 40, target: 35 },  // Part 1: ~35 words per answer
+    2: { min: 140, max: 160, target: 150 }, // Part 2: ~150 words total
+    3: { min: 60, max: 80, target: 70 },  // Part 3: ~70 words per answer
+  };
+  const limits = modelAnswerWordLimits[partNumber];
+
   const partDescriptions: Record<number, string> = {
-    1: 'Part 1: Introduction and familiar topics (30-60 words expected per answer)',
-    2: 'Part 2: Individual long turn with cue card (150-250 words expected)',
-    3: 'Part 3: Two-way discussion with abstract topics (40-80 words expected per answer)',
+    1: 'Part 1: Introduction and familiar topics (30-40 words expected per answer)',
+    2: 'Part 2: Individual long turn with cue card (140-160 words expected)',
+    3: 'Part 3: Two-way discussion with abstract topics (60-80 words expected per answer)',
   };
 
   return `You are a CERTIFIED SENIOR IELTS Speaking Examiner evaluating ${partDescriptions[partNumber]}.
@@ -1062,16 +1070,47 @@ SCORING GUIDELINES
 🔵 Band 7+: Full, fluent, well-developed responses
 
 ══════════════════════════════════════════════════════════════
+🚨 MANDATORY: EXAMPLES FOR ALL WEAKNESSES 🚨
+══════════════════════════════════════════════════════════════
+
+For EVERY weakness listed, you MUST include a SPECIFIC EXAMPLE from the candidate's actual response.
+
+FORMAT: "Issue description (e.g., 'word or phrase from their answer')"
+
+❌ BAD: "Some inaccuracies in word choice"
+✅ GOOD: "Incorrect word form usage (e.g., 'travel solo-ly' instead of 'travel solo')"
+
+❌ BAD: "Limited vocabulary range"
+✅ GOOD: "Repetitive use of basic adjectives (e.g., used 'good' 4 times instead of 'beneficial', 'excellent', 'valuable')"
+
+❌ BAD: "Some grammar errors"
+✅ GOOD: "Subject-verb agreement errors (e.g., 'the people goes' instead of 'the people go')"
+
+EVERY weakness MUST cite a specific example in parentheses from the transcript.
+
+══════════════════════════════════════════════════════════════
+🚨 STRICT MODEL ANSWER WORD LIMITS 🚨
+══════════════════════════════════════════════════════════════
+
+Part ${partNumber} Model Answer Requirements:
+- MINIMUM: ${limits.min} words
+- MAXIMUM: ${limits.max} words
+- TARGET: ${limits.target} words
+
+⚠️ Model answers outside this range are INVALID.
+Count words carefully before outputting.
+
+══════════════════════════════════════════════════════════════
 OUTPUT JSON SCHEMA
 ══════════════════════════════════════════════════════════════
 {
   "part_number": ${partNumber},
   "part_band": 6.0,
   "criteria": {
-    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
-    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
-    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]},
-    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["w1"], "suggestions": ["tip1"]}
+    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "pronunciation": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]}
   },
   "part_summary": "2-3 sentences summarizing Part ${partNumber} performance",
   "transcripts": [
@@ -1086,7 +1125,7 @@ OUTPUT JSON SCHEMA
       "candidateResponse": "EXACT transcript from audio",
       "estimatedBand": 5.5,
       "targetBand": 6,
-      "modelAnswer": "Model response written at EXACTLY the targetBand level (~50 words for Part 1, ~150 for Part 2, ~80 for Part 3)",
+      "modelAnswer": "Model response at EXACTLY ${limits.target} words (±5). Count carefully!",
       "whyItWorks": ["reason1", "reason2"],
       "keyImprovements": ["improvement1"]
     }
@@ -1096,7 +1135,7 @@ OUTPUT JSON SCHEMA
 
 IMPORTANT OUTPUT LIMITS:
 - strengths: maximum 2 items per criterion
-- weaknesses: maximum 2 items per criterion  
+- weaknesses: maximum 2 items per criterion (EACH with example from transcript)
 - suggestions: maximum 2 items per criterion
 - whyItWorks: maximum 2 reasons
 - keyImprovements: maximum 2 items
@@ -1117,7 +1156,8 @@ Example: If criteria scores are FC=6, LR=6, GRA=5.5, P=6
 
 Write ALL modelAnswers at the targetBand level to show the next achievable level.
 
-Return EXACTLY ${numQ} transcripts and ${numQ} modelAnswers.`;
+🚨 MANDATORY: Return EXACTLY ${numQ} transcripts AND EXACTLY ${numQ} modelAnswers.
+Every question MUST have a model answer. No exceptions.`;
 }
 
 function aggregatePartResults(

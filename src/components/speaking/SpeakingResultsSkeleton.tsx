@@ -1,6 +1,9 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Progress } from '@/components/ui/progress';
+import { Timer, CheckCircle2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useEffect, useState } from 'react';
 
 interface SpeakingResultsSkeletonProps {
   className?: string;
@@ -82,20 +85,54 @@ interface ProcessingCardSkeletonProps {
   totalParts?: number;
   retryCount?: number;
   jobStage?: string | null;
+  jobCreatedAt?: string | null;
   onCancel?: () => void;
   isCancelling?: boolean;
 }
 
-// Define the stages for the evaluation pipeline
+// Format milliseconds to human readable time
+function formatElapsedTime(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  const mins = Math.floor(ms / 60000);
+  const secs = Math.round((ms % 60000) / 1000);
+  return `${mins}m ${secs}s`;
+}
+
+// Live elapsed time component - matches history page style
+function LiveElapsedTime({ startTime }: { startTime: string }) {
+  const [elapsed, setElapsed] = useState('');
+  
+  useEffect(() => {
+    const start = new Date(startTime).getTime();
+    
+    const update = () => {
+      const now = Date.now();
+      const durationMs = now - start;
+      setElapsed(formatElapsedTime(durationMs));
+    };
+    
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+  
+  return (
+    <span className="flex items-center gap-1.5 text-sm text-primary font-medium animate-pulse">
+      <Timer className="w-4 h-4" />
+      {elapsed}
+    </span>
+  );
+}
+
+// Define the stages for the evaluation pipeline - matches history page
 const EVALUATION_STAGES = [
-  { key: 'queued', label: 'Queued for evaluation', icon: '⏳', description: 'Your submission is in the queue' },
-  { key: 'uploading', label: 'Uploading audio to AI', icon: '📤', description: 'Sending your recordings for analysis' },
-  { key: 'transcribing', label: 'Transcribing speech', icon: '📝', description: 'Converting your speech to text' },
-  { key: 'evaluating_part_1', label: 'Evaluating Part 1', icon: '🎯', description: 'Analyzing interview responses' },
-  { key: 'evaluating_part_2', label: 'Evaluating Part 2', icon: '🎯', description: 'Analyzing long turn response' },
-  { key: 'evaluating_part_3', label: 'Evaluating Part 3', icon: '🎯', description: 'Analyzing discussion responses' },
-  { key: 'generating_feedback', label: 'Generating feedback', icon: '✨', description: 'Creating personalized suggestions' },
-  { key: 'finalizing', label: 'Finalizing results', icon: '📊', description: 'Preparing your score report' },
+  { key: 'queued', label: 'Queued for evaluation' },
+  { key: 'uploading', label: 'Uploading audio to AI' },
+  { key: 'transcribing', label: 'Transcribing speech' },
+  { key: 'evaluating_part_1', label: 'Evaluating Part 1' },
+  { key: 'evaluating_part_2', label: 'Evaluating Part 2' },
+  { key: 'evaluating_part_3', label: 'Evaluating Part 3' },
 ];
 
 function getActiveStageIndex(stage: 'queued' | 'processing', currentPart: number, jobStage?: string | null): number {
@@ -104,10 +141,9 @@ function getActiveStageIndex(stage: 'queued' | 'processing', currentPart: number
   const js = String(jobStage || '');
 
   // Map explicit job stages
+  if (js === 'pending_upload' || js === 'pending' || js === 'queuing') return 0;
   if (js === 'uploading') return 1;
   if (js === 'transcribing') return 2;
-  if (js === 'generating_feedback' || js === 'generating') return 6;
-  if (js === 'finalizing' || js === 'saving') return 7;
 
   // Map part-specific stages if present
   if (js === 'evaluating_part_1') return 3;
@@ -115,16 +151,20 @@ function getActiveStageIndex(stage: 'queued' | 'processing', currentPart: number
   if (js === 'evaluating_part_3') return 5;
 
   // Text-based pipeline sometimes reports 'evaluating_text' with current_part
-  if (js === 'evaluating_text' || js === 'evaluating') {
+  if (js === 'evaluating_text' || js === 'evaluating' || js === 'pending_eval') {
     if (currentPart === 2) return 4;
     if (currentPart === 3) return 5;
-    return 3;
+    if (currentPart >= 1) return 3;
   }
 
-  // Default to first evaluation stage if processing
-  return 3;
+  // Default to first stage if processing
+  return stage === 'processing' ? 1 : 0;
 }
 
+/**
+ * ProcessingCardSkeleton - Matches the history page progress UI style
+ * Shows a step-by-step checklist with live elapsed time, no progress bar jumps
+ */
 export function ProcessingCardSkeleton({
   stage,
   progress: _progress = 0,
@@ -132,16 +172,20 @@ export function ProcessingCardSkeleton({
   totalParts: _totalParts = 3,
   retryCount = 0,
   jobStage,
+  jobCreatedAt,
   onCancel,
   isCancelling,
 }: ProcessingCardSkeletonProps) {
   const activeStageIndex = getActiveStageIndex(stage, currentPart, jobStage);
   const activeStage = EVALUATION_STAGES[activeStageIndex];
   
+  // Calculate smooth progress based on stage index (never resets backwards)
+  const smoothProgress = Math.round(((activeStageIndex + 1) / EVALUATION_STAGES.length) * 100);
+  
   return (
     <Card className="max-w-md w-full animate-fade-in">
       <CardContent className="py-8">
-        {/* Animated spinner */}
+        {/* Animated spinner - same as before but smaller */}
         <div className="relative mx-auto w-20 h-20 mb-6">
           <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
           <div 
@@ -153,51 +197,59 @@ export function ProcessingCardSkeleton({
             style={{ animationDuration: '2s', animationDirection: 'reverse' }}
           ></div>
           <div className="absolute inset-0 flex items-center justify-center text-2xl">
-            {activeStage?.icon || '🎯'}
+            🎯
           </div>
         </div>
         
-        <h2 className="text-xl font-bold mb-2 text-center animate-pulse">
+        <h2 className="text-xl font-bold mb-2 text-center">
           {activeStage?.label || 'Processing...'}
         </h2>
         
-        <p className="text-muted-foreground mb-6 text-sm text-center">
-          {activeStage?.description || 'Our AI examiner is reviewing your responses.'}
+        <p className="text-muted-foreground mb-4 text-sm text-center">
+          Our AI examiner is reviewing your responses
         </p>
 
-        {/* Stage Progress Steps */}
+        {/* Live elapsed time - prominent display like history page */}
+        {jobCreatedAt && (
+          <div className="flex justify-center mb-6">
+            <LiveElapsedTime startTime={jobCreatedAt} />
+          </div>
+        )}
+
+        {/* Stage Progress Steps - Checklist style like history page */}
         <div className="space-y-2 mb-6">
-          {EVALUATION_STAGES.slice(0, Math.min(activeStageIndex + 3, EVALUATION_STAGES.length)).map((s, index) => {
+          {EVALUATION_STAGES.map((s, index) => {
             const isCompleted = index < activeStageIndex;
             const isActive = index === activeStageIndex;
             
             return (
               <div 
                 key={s.key}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-300 ${
-                  isActive 
-                    ? 'bg-primary/10 border border-primary/30' 
-                    : isCompleted 
-                      ? 'bg-success/5' 
-                      : 'opacity-50'
-                }`}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-300",
+                  isActive && "bg-primary/10 border border-primary/30",
+                  isCompleted && "bg-success/5",
+                  !isActive && !isCompleted && "opacity-40"
+                )}
               >
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                  isCompleted 
-                    ? 'bg-success text-success-foreground' 
-                    : isActive 
-                      ? 'bg-primary text-primary-foreground animate-pulse' 
-                      : 'bg-muted text-muted-foreground'
-                }`}>
+                <div className={cn(
+                  "w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0",
+                  isCompleted && "bg-success text-success-foreground",
+                  isActive && "bg-primary text-primary-foreground",
+                  !isActive && !isCompleted && "bg-muted text-muted-foreground"
+                )}>
                   {isCompleted ? (
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
+                    <CheckCircle2 className="w-4 h-4" />
                   ) : (
                     <span>{index + 1}</span>
                   )}
                 </div>
-                <span className={`text-sm ${isActive ? 'font-medium text-foreground' : isCompleted ? 'text-success' : 'text-muted-foreground'}`}>
+                <span className={cn(
+                  "text-sm",
+                  isActive && "font-medium text-foreground",
+                  isCompleted && "text-success",
+                  !isActive && !isCompleted && "text-muted-foreground"
+                )}>
                   {s.label}
                 </span>
                 {isActive && (
@@ -205,9 +257,8 @@ export function ProcessingCardSkeleton({
                     {[0, 1, 2].map((i) => (
                       <div 
                         key={i}
-                        className="w-1.5 h-1.5 rounded-full bg-primary"
+                        className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
                         style={{
-                          animation: 'bounce 1.4s infinite ease-in-out',
                           animationDelay: `${i * 0.16}s`
                         }}
                       />
@@ -217,28 +268,14 @@ export function ProcessingCardSkeleton({
               </div>
             );
           })}
-          
-          {/* Show remaining steps indicator if there are more */}
-          {activeStageIndex + 3 < EVALUATION_STAGES.length && (
-            <div className="text-center text-xs text-muted-foreground mt-2">
-              +{EVALUATION_STAGES.length - activeStageIndex - 3} more steps...
-            </div>
-          )}
         </div>
 
-        {/* Progress bar */}
+        {/* Smooth progress bar that never resets */}
         <div className="mb-4">
-          <div className="h-2 bg-muted rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-700 ease-out rounded-full"
-              style={{ 
-                width: `${Math.round(((activeStageIndex + 1) / EVALUATION_STAGES.length) * 100)}%`
-              }}
-            />
-          </div>
+          <Progress value={smoothProgress} className="h-2" />
           <div className="flex justify-between text-xs text-muted-foreground mt-1">
             <span>Step {activeStageIndex + 1} of {EVALUATION_STAGES.length}</span>
-            <span>~{stage === 'queued' ? '60-90' : Math.max(10, 60 - activeStageIndex * 8)}s remaining</span>
+            <span>{smoothProgress}%</span>
           </div>
         </div>
 

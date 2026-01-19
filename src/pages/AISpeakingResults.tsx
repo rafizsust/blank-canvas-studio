@@ -589,6 +589,7 @@ export default function AISpeakingResults() {
             totalParts={totalParts}
             retryCount={retryCount}
             jobStage={jobStage}
+            jobCreatedAt={latestJobUpdatedAt || undefined}
             onCancel={latestJobId ? cancelJob : undefined}
             isCancelling={isCancelling}
           />
