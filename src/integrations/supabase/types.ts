@@ -1864,11 +1864,7 @@ export type Database = {
           p_model_name?: string
           p_part_number: number
         }
-        Returns: {
-          is_user_key: boolean
-          key_id: string
-          key_value: string
-        }[]
+        Returns: Record<string, unknown>[]
       }
       checkout_key_for_part_v2: {
         Args: {
@@ -1877,11 +1873,7 @@ export type Database = {
           p_model_name?: string
           p_part_number: number
         }
-        Returns: {
-          is_user_key: boolean
-          key_id: string
-          key_value: string
-        }[]
+        Returns: Record<string, unknown>[]
       }
       cleanup_old_data: { Args: never; Returns: Json }
       cleanup_old_key_locks: { Args: never; Returns: number }

@@ -147,12 +147,17 @@ export async function checkoutKeyForPart(
   }
   
   const key = keyRows[0];
-  console.log(`[keyPoolManager] Checked out admin key ${key.key_id?.slice(0, 8)}... for part ${partNumber}`);
+  // Handle both old column names (key_id) and new OUT parameter names (out_key_id)
+  const keyId = key.out_key_id || key.key_id;
+  const keyValue = key.out_key_value || key.key_value;
+  const isUserKey = key.out_is_user_key ?? key.is_user_key ?? false;
+  
+  console.log(`[keyPoolManager] Checked out admin key ${keyId?.slice(0, 8)}... for part ${partNumber}`);
   
   return {
-    keyId: key.key_id,
-    keyValue: key.key_value,
-    isUserKey: key.is_user_key || false,
+    keyId,
+    keyValue,
+    isUserKey,
   };
 }
 
