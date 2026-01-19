@@ -400,9 +400,9 @@ export default function AIPractice() {
           } else {
             // Note: Difficulty filter removed - test takers get tests at any difficulty level
               // Filter by topic (manual selection OR smart-cycle topic)
-              // Skip topic filter for FULL_TEST variants and for all writing tests (topics are randomly selected)
-              const skipTopicFilter = activeModule === 'writing' ||
-                                       (activeModule === 'speaking' && currentQuestionType === 'FULL_TEST');
+              // Skip topic filter only for writing tests (topics are randomly selected)
+              // Speaking tests (including FULL_TEST) should always respect user's topic selection
+              const skipTopicFilter = activeModule === 'writing';
               
               // CRITICAL: For modules that require topic matching (reading, listening, speaking parts),
               // we MUST have a topic to match. If no topic is available, don't use presets.
