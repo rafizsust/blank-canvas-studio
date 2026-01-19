@@ -483,7 +483,51 @@ serve(async (req) => {
           throw new Error(`Daily quota exhausted for key ${currentKeyId?.slice(0, 8)}...`);
         }
 
-        // For other errors, just fail
+        // Handle transient errors (503, timeouts, etc.) - allow retry
+        if (errorClass.type === 'transient') {
+          await perfLogger.logError(GEMINI_MODEL, `Transient: ${errMsg.slice(0, 100)}`, responseTimeMs, currentKeyId !== 'user' ? currentKeyId : undefined);
+          
+          // Release the key without cooldown and re-queue for retry
+          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
+          
+          // Re-queue for retry with same or different key
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({
+              status: 'pending',
+              stage: 'pending_eval',
+              last_error: `Transient error (will retry): ${errMsg.slice(0, 150)}`,
+              lock_token: null,
+              lock_expires_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', jobId);
+          
+          console.log(`[speaking-evaluate-job] Transient error, re-queued for retry`);
+          
+          // Schedule retry in 5 seconds
+          setTimeout(() => {
+            fetch(`${supabaseUrl}/functions/v1/speaking-evaluate-job`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({ jobId }),
+            }).catch(e => console.error(`[speaking-evaluate-job] Retry trigger failed:`, e));
+          }, 5000);
+          
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: 'Transient error, retrying',
+            retrying: true,
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        // For other permanent errors, just fail
         await perfLogger.logError(GEMINI_MODEL, errMsg.slice(0, 200), responseTimeMs, currentKeyId !== 'user' ? currentKeyId : undefined);
         throw new Error(`Part ${partToProcess} evaluation failed: ${errMsg.slice(0, 100)}`);
       }

@@ -257,7 +257,7 @@ export function classifyError(error: any): ErrorClassification {
   // ========================================
   // TRANSIENT ERRORS
   // ========================================
-  // Network issues, timeouts - can retry with same key
+  // Network issues, timeouts, server overload - can retry with same key
   if (
     msg.includes('timeout') ||
     msg.includes('timed out') ||
@@ -265,14 +265,27 @@ export function classifyError(error: any): ErrorClassification {
     msg.includes('connection') ||
     msg.includes('econnreset') ||
     msg.includes('socket hang up') ||
-    msg.includes('fetch failed')
+    msg.includes('fetch failed') ||
+    msg.includes('503') ||
+    msg.includes('service unavailable') ||
+    msg.includes('overloaded') ||
+    msg.includes('temporarily unavailable') ||
+    msg.includes('try again') ||
+    msg.includes('internal server error') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('504') ||
+    (status === 500) ||
+    (status === 502) ||
+    (status === 503) ||
+    (status === 504)
   ) {
     return {
       type: 'transient',
       cooldownMinutes: 0,
       shouldRetry: true,  // Can retry with same key
       shouldSwitchKey: false,
-      description: 'Transient network error. Will retry.',
+      description: 'Transient server/network error. Will retry.',
     };
   }
   
