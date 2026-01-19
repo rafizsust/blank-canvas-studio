@@ -146,7 +146,7 @@ Score harshly for poor responses:
 MODEL ANSWER WORD COUNTS:
 - Part 1: 30-40 words
 - Part 2: 120-140 words
-- Part 3: 55-65 words
+- Part 3: 50-55 words (concise analytical response)
 
 JSON OUTPUT SCHEMA:
 {

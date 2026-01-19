@@ -26,7 +26,6 @@ import {
   AlertCircle,
   Volume2,
   FileText,
-  BookOpen,
   Loader2,
   RotateCcw,
   Home,
@@ -446,13 +445,12 @@ export default function SpeakingEvaluationReport() {
 
           {/* Tabbed Content - matching AI Speaking Results structure */}
           <Tabs defaultValue="criteria" className="mb-6">
-            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-6 h-auto p-1">
+            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-5 h-auto p-1">
               <TabsTrigger value="criteria" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Criteria</TabsTrigger>
               <TabsTrigger value="transcript" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Transcript</TabsTrigger>
               <TabsTrigger value="model" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Model</TabsTrigger>
               <TabsTrigger value="lexical" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Lexical</TabsTrigger>
               <TabsTrigger value="parts" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Parts</TabsTrigger>
-              <TabsTrigger value="improve" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Improve</TabsTrigger>
             </TabsList>
 
             {/* Criteria Breakdown */}
@@ -998,90 +996,6 @@ export default function SpeakingEvaluationReport() {
                   </CardContent>
                 </Card>
               )}
-            </TabsContent>
-
-            {/* Improvement Priorities Tab */}
-            <TabsContent value="improve" className="mt-6 space-y-4">
-              {/* Priorities */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-warning" />
-                    Improvement Priorities
-                  </CardTitle>
-                  <CardDescription>Focus on these areas to boost your band score</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {(evaluationReport.improvement_priorities || evaluationReport.improvement_recommendations)?.length ? (
-                    <ol className="space-y-3">
-                      {(evaluationReport.improvement_priorities || evaluationReport.improvement_recommendations)?.map((priority, i) => (
-                        <li key={i} className="flex items-start gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-warning/20 text-warning text-sm font-bold flex items-center justify-center">
-                            {i + 1}
-                          </span>
-                          <span className="text-sm">{priority}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="text-muted-foreground">No specific improvement priorities identified.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Strengths to Maintain */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-success" />
-                    Strengths to Maintain
-                  </CardTitle>
-                  <CardDescription>Keep doing these well!</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {evaluationReport.strengths_to_maintain && evaluationReport.strengths_to_maintain.length > 0 ? (
-                    <ul className="space-y-2">
-                      {evaluationReport.strengths_to_maintain.map((strength, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
-                          <span>{strength}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-muted-foreground">Keep practicing to develop more strengths!</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Examiner Notes */}
-              {evaluationReport.examiner_notes && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <MessageSquare className="w-5 h-5 text-primary" />
-                      Examiner Notes
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm italic text-muted-foreground">
-                      "{evaluationReport.examiner_notes}"
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Flashcard Import */}
-              <div className="pt-4 border-t border-border/50 flex items-center gap-3">
-                <BookOpen size={18} className="text-primary" />
-                <span className="text-sm text-muted-foreground">Save key vocabulary from this feedback:</span>
-                <AddToFlashcardButton 
-                  word=""
-                  meaning=""
-                  example=""
-                  variant="button"
-                />
-              </div>
             </TabsContent>
           </Tabs>
 

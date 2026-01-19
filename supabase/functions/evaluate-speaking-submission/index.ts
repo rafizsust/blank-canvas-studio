@@ -122,12 +122,16 @@ IMPORTANT OUTPUT LIMITS:
 - whyItWorks: maximum 2 reasons
 - keyImprovements: maximum 2 items
 - lexical_upgrades: maximum 5 total
-- improvement_priorities: REQUIRED 2-3 specific priorities based on lowest scoring criteria
 
 MODEL ANSWER WORD COUNTS (STRICT - MUST FOLLOW):
 - Part 1: 30-40 words EXACTLY (natural, conversational - do NOT exceed)
 - Part 2: 120-140 words EXACTLY (covers all cue card points with examples - this is the long turn)
-- Part 3: 55-65 words EXACTLY (analytical with one supporting example)
+- Part 3: 50-55 words EXACTLY (concise analytical response with one supporting example)
+
+LENGTH ASSESSMENT RULES:
+- NEVER criticize responses for being too long. Longer responses demonstrate willingness to speak at length.
+- ONLY flag responses as insufficient if they are TOO SHORT for the expected task (e.g., Part 2 under 80 seconds)
+- Verbose responses are a STRENGTH, not a weakness.
 
 ══════════════════════════════════════════════════════════════
 WEAKNESS FORMAT (IMPORTANT)
@@ -140,14 +144,6 @@ Examples:
 ✓ "Frequent hesitations interrupt flow. Example: 'I think... um... it's like... you know... important'"
 ✓ "Limited vocabulary range for describing emotions. Example: 'I felt happy' instead of more nuanced expressions"
 ✓ "Subject-verb agreement errors. Example: 'The people was going' should be 'The people were going'"
-
-══════════════════════════════════════════════════════════════
-IMPROVEMENT PRIORITIES (REQUIRED)
-══════════════════════════════════════════════════════════════
-Generate 2-3 improvement priorities based on the LOWEST scoring criteria. Focus on:
-1. The most impactful areas for score improvement
-2. Specific, actionable recommendations
-3. Link to the weakest criterion/criteria
 
 ══════════════════════════════════════════════════════════════
 JSON OUTPUT SCHEMA
@@ -164,8 +160,6 @@ JSON OUTPUT SCHEMA
   "summary": "2-3 sentence performance summary",
   "lexical_upgrades": [{"original": "good", "upgraded": "beneficial", "context": "usage"}],
   "part_analysis": [{"part_number": 1, "performance_notes": "...", "key_moments": [], "areas_for_improvement": []}],
-  "improvement_priorities": ["Focus on [lowest criterion]: specific actionable advice", "Work on [second lowest]: concrete recommendation"],
-  "strengths_to_maintain": ["Strength 1"],
   "transcripts_by_part": {"1": "...", "2": "...", "3": "..."},
   "transcripts_by_question": {
     "1": [{"segment_key": "...", "question_number": 1, "question_text": "...", "transcript": "EXACT words"}],

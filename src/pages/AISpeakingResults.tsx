@@ -864,54 +864,6 @@ export default function AISpeakingResults() {
                 ))}
               </div>
 
-              {/* Improvement Priorities Section */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-warning" />
-                    Improvement Priorities
-                  </CardTitle>
-                  <CardDescription>Focus on these areas to boost your band score</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {report.improvement_priorities && report.improvement_priorities.length > 0 ? (
-                    <ol className="space-y-3">
-                      {report.improvement_priorities.map((priority, i) => (
-                        <li key={i} className="flex items-start gap-3">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-warning/20 text-warning text-sm font-bold flex items-center justify-center">
-                            {i + 1}
-                          </span>
-                          <span className="text-sm">{priority}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="text-muted-foreground">No specific improvement priorities identified.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Strengths to Maintain */}
-              {report.strengths_to_maintain && report.strengths_to_maintain.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5 text-success" />
-                      Strengths to Maintain
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ul className="space-y-2">
-                      {report.strengths_to_maintain.map((strength, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0 mt-0.5" />
-                          <span>{strength}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </Card>
-              )}
 
               {/* Examiner Notes */}
               {report.examiner_notes && (

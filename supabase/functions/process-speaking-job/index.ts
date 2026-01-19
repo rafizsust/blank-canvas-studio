@@ -973,20 +973,15 @@ Examples:
 ✓ "Subject-verb agreement errors. Example: 'The people was going' should be 'The people were going'"
 
 ═══════════════════════════════════════════════════════════════════════════════
-IMPROVEMENT PRIORITIES (REQUIRED - DO NOT LEAVE EMPTY)
-═══════════════════════════════════════════════════════════════════════════════
-
-Generate 2-3 improvement_priorities based on the LOWEST scoring criteria. These must be:
-1. Specific and actionable (not generic advice)
-2. Tied to the weakest criterion/criteria
-3. Include concrete examples or techniques
-
-Example: If Grammatical Range scores 5.5 (lowest), priority could be:
-"Focus on complex sentence structures: Practice using conditional sentences and relative clauses to demonstrate Band 6+ grammar flexibility"
-
-═══════════════════════════════════════════════════════════════════════════════
 REQUIRED JSON OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════════════════
+
+MODEL ANSWER WORD COUNTS (STRICT):
+- Part 1: 30-40 words (natural, conversational)
+- Part 2: 120-140 words (covers all cue card points)
+- Part 3: 50-55 words (concise analytical with one example)
+
+LENGTH ASSESSMENT: NEVER criticize responses for being too long. Only flag if TOO SHORT.
 
 \`\`\`json
 {
@@ -1021,8 +1016,6 @@ REQUIRED JSON OUTPUT FORMAT
     }
   ],
   "lexical_upgrades": [{"original": "word used", "upgraded": "target band alternative", "context": "usage example"}],
-  "improvement_priorities": ["Focus on [lowest criterion]: specific actionable advice based on weaknesses", "Work on [second lowest]: concrete recommendation with example"],
-  "strengths_to_maintain": ["Strength 1...", "Strength 2..."],
   "part_analysis": [
     {
       "part_number": 1,
