@@ -207,6 +207,8 @@ export type Database = {
           id: string
           is_active: boolean
           key_value: string
+          locked_by_job_id: string | null
+          locked_until: string | null
           pro_3_0_quota_exhausted: boolean | null
           pro_3_0_quota_exhausted_date: string | null
           provider: string
@@ -240,6 +242,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           key_value: string
+          locked_by_job_id?: string | null
+          locked_until?: string | null
           pro_3_0_quota_exhausted?: boolean | null
           pro_3_0_quota_exhausted_date?: string | null
           provider: string
@@ -273,6 +277,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           key_value?: string
+          locked_by_job_id?: string | null
+          locked_until?: string | null
           pro_3_0_quota_exhausted?: boolean | null
           pro_3_0_quota_exhausted_date?: string | null
           provider?: string
@@ -1776,6 +1782,17 @@ export type Database = {
         Args: { p_cost: number; p_user_id: string }
         Returns: Json
       }
+      checkout_api_key: {
+        Args: {
+          p_job_id: string
+          p_lock_minutes?: number
+          p_model_name: string
+        }
+        Returns: {
+          key_id: string
+          key_value: string
+        }[]
+      }
       cleanup_old_data: { Args: never; Returns: Json }
       get_credit_status: { Args: { p_user_id: string }; Returns: Json }
       get_model_performance_stats: {
@@ -1813,6 +1830,7 @@ export type Database = {
         Args: { p_cost: number; p_user_id: string }
         Returns: undefined
       }
+      release_api_key: { Args: { p_job_id: string }; Returns: undefined }
       reset_api_key_model_quotas: {
         Args: { p_key_id?: string }
         Returns: undefined
