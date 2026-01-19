@@ -133,6 +133,8 @@ export default function AIPracticeSpeakingTest() {
   // Guards to prevent background submission/evaluation from hijacking navigation after exit
   const isMountedRef = useRef(true);
   const exitRequestedRef = useRef(false);
+  // Track if submission should continue even after unmount (accuracy mode background submission)
+  const backgroundSubmissionActiveRef = useRef(false);
 
   // Test state
   const [phase, setPhase] = useState<TestPhase>('loading');
@@ -1033,7 +1035,16 @@ export default function AIPracticeSpeakingTest() {
 
 
   const submitTest = async () => {
-    if (exitRequestedRef.current || !isMountedRef.current) return;
+    // For accuracy mode, set background flag FIRST so checks below can use it
+    // This allows submission to complete even after navigation
+    const isBackgroundSubmission = evaluationMode === 'accuracy';
+    if (isBackgroundSubmission) {
+      backgroundSubmissionActiveRef.current = true;
+    }
+    
+    // Only abort if exit was explicitly requested - for accuracy mode, allow unmounted submission
+    if (exitRequestedRef.current) return;
+    if (!isBackgroundSubmission && !isMountedRef.current) return;
 
     // Clear safety timer to prevent double submission
     if (presetAudioTimersRef.current.endingSafety) {
@@ -1139,7 +1150,9 @@ export default function AIPracticeSpeakingTest() {
 
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
-        if (exitRequestedRef.current || !isMountedRef.current) return;
+        // Only abort for explicit exit request - accuracy mode submissions continue after unmount
+        if (exitRequestedRef.current) return;
+        if (!backgroundSubmissionActiveRef.current && !isMountedRef.current) return;
 
         const seg = segments[key];
         const inferredType = seg.chunks?.[0]?.type || 'audio/webm';
@@ -1308,7 +1321,9 @@ export default function AIPracticeSpeakingTest() {
         },
       });
 
-      if (exitRequestedRef.current || !isMountedRef.current) return;
+      // Only abort for explicit exit request - accuracy mode submissions continue after unmount
+      if (exitRequestedRef.current) return;
+      if (!backgroundSubmissionActiveRef.current && !isMountedRef.current) return;
 
       if (error) {
         console.error('[AIPracticeSpeakingTest] Async evaluation error:', error);
@@ -1318,13 +1333,17 @@ export default function AIPracticeSpeakingTest() {
       // Async route returns jobId - evaluation happens in background
       if (data?.jobId || data?.success) {
         console.log('[AIPracticeSpeakingTest] Evaluation job queued:', data.jobId || 'preset');
-        setEvaluationStep(3);
-        setSubmissionProgress({ 
-          step: 'Submitted!', 
-          detail: 'Your test is now being evaluated by AI. Check your history for results.', 
-          currentItem: 0, 
-          totalItems: 0 
-        });
+        
+        // Only update state if component is still mounted
+        if (isMountedRef.current) {
+          setEvaluationStep(3);
+          setSubmissionProgress({ 
+            step: 'Submitted!', 
+            detail: 'Your test is now being evaluated by AI. Check your history for results.', 
+            currentItem: 0, 
+            totalItems: 0 
+          });
+        }
 
         // Delete persisted audio (uploaded successfully)
         if (testId) await deleteAudioSegments(testId);
@@ -1333,18 +1352,24 @@ export default function AIPracticeSpeakingTest() {
         if (test?.topic) incrementCompletion(test.topic);
 
         // Show success toast - evaluation is processing in background
-        toast({
-          title: 'Test Submitted!',
-          description: 'Your speaking test is being evaluated. Check your history for results.',
-        });
+        // Only show if mounted to avoid "Can't perform state update on unmounted" warnings
+        if (isMountedRef.current) {
+          toast({
+            title: 'Test Submitted!',
+            description: 'Your speaking test is being evaluated. Check your history for results.',
+          });
+        }
 
         // Clear tracker - job is now in DB, History will poll via realtime
         if (testId) clearSpeakingSubmissionTracker(testId);
         
+        // Clear background submission flag
+        backgroundSubmissionActiveRef.current = false;
+        
         // Mark that we want to navigate after ending audio completes
         pendingNavigationRef.current = true;
         
-        // If ending audio has already completed, navigate immediately
+        // If ending audio has already completed, navigate immediately (only if still mounted)
         if (endingAudioCompleteRef.current && !exitRequestedRef.current && isMountedRef.current) {
           setPhase('done');
           await exitFullscreen();
@@ -1359,6 +1384,9 @@ export default function AIPracticeSpeakingTest() {
 
     } catch (err: any) {
       console.error('[AIPracticeSpeakingTest] Submission error:', err);
+      
+      // Clear background submission flag on error
+      backgroundSubmissionActiveRef.current = false;
 
       const errDesc = describeApiError(err);
 
@@ -1369,19 +1397,20 @@ export default function AIPracticeSpeakingTest() {
         console.log('[AIPracticeSpeakingTest] Audio persisted for retry');
       }
 
+      // Update tracker to failed state (always do this, even if unmounted)
+      if (testId) {
+        patchSpeakingSubmissionTracker(testId, {
+          stage: 'failed' as SpeakingSubmissionStage,
+          lastError: errDesc.title,
+          detail: errDesc.description,
+        });
+      }
+
+      // Only update component state if still mounted
       if (isMountedRef.current) {
         setSubmissionError(errDesc);
         setPhase('submission_error');
         setIsResubmitting(false);
-        
-        // Update tracker to failed state
-        if (testId) {
-          patchSpeakingSubmissionTracker(testId, {
-            stage: 'failed' as SpeakingSubmissionStage,
-            lastError: errDesc.title,
-            detail: errDesc.description,
-          });
-        }
 
         toast({
           title: errDesc.title,
