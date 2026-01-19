@@ -1057,6 +1057,7 @@ export default function AIPracticeSpeakingTest() {
     const safeToast = (args: Parameters<typeof toast>[0]) => {
       if (isMountedRef.current) toast(args);
     };
+    void safeToast; // Used below in error handling
 
     // Clear safety timer to prevent double submission
     if (presetAudioTimersRef.current.endingSafety) {
@@ -1370,12 +1371,10 @@ export default function AIPracticeSpeakingTest() {
 
         // Show success toast - evaluation is processing in background
         // Only show if mounted to avoid "Can't perform state update on unmounted" warnings
-        if (isMountedRef.current) {
-          toast({
-            title: 'Test Submitted!',
-            description: 'Your speaking test is being evaluated. Check your history for results.',
-          });
-        }
+        safeToast({
+          title: 'Test Submitted!',
+          description: 'Your speaking test is being evaluated. Check your history for results.',
+        });
 
         // Clear tracker - job is now in DB, History will poll via realtime
         if (testId) clearSpeakingSubmissionTracker(testId);
@@ -1429,7 +1428,7 @@ export default function AIPracticeSpeakingTest() {
         setPhase('submission_error');
         setIsResubmitting(false);
 
-        toast({
+        safeToast({
           title: errDesc.title,
           description: 'Your recordings are preserved. You can try again.',
           variant: 'destructive',

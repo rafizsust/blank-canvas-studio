@@ -2,7 +2,7 @@ import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { Loader2, X, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 export type EvaluationStage = 
   | 'preparing'
@@ -204,15 +204,19 @@ export function InlineProgressBanner({
   const stageLabel = getStageLabel(stage, currentPart);
 
   // Prevent the progress bar from "jumping backwards" when the backend stage briefly returns
-  // to a low-progress label (e.g., "queuing" between parts). Reset when the startTime changes.
-  const maxProgressRef = useState(() => ({ key: '', max: 0 }))[0];
+  // to a low-progress label (e.g., "queuing" between parts). Reset only when startTime changes.
+  const maxProgressRef = useRef<{ key: string; max: number }>({ key: '', max: 0 });
   const progressKey = startTime ? String(startTime) : '__no_start_time__';
-  if (maxProgressRef.key !== progressKey) {
-    maxProgressRef.key = progressKey;
-    maxProgressRef.max = 0;
+  
+  // Reset max progress only when the evaluation job itself restarts (new startTime)
+  if (maxProgressRef.current.key !== progressKey) {
+    maxProgressRef.current.key = progressKey;
+    maxProgressRef.current.max = 0;
   }
-  maxProgressRef.max = Math.max(maxProgressRef.max, calculatedProgress);
-  const displayProgress = maxProgressRef.max;
+  
+  // Always advance max progress - never go backwards
+  maxProgressRef.current.max = Math.max(maxProgressRef.current.max, calculatedProgress);
+  const displayProgress = maxProgressRef.current.max;
 
   return (
     <div
