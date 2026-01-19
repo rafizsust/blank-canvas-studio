@@ -1870,6 +1870,19 @@ export type Database = {
           key_value: string
         }[]
       }
+      checkout_key_for_part_v2: {
+        Args: {
+          p_job_id: string
+          p_lock_duration_seconds?: number
+          p_model_name?: string
+          p_part_number: number
+        }
+        Returns: {
+          is_user_key: boolean
+          key_id: string
+          key_value: string
+        }[]
+      }
       cleanup_old_data: { Args: never; Returns: Json }
       cleanup_old_key_locks: { Args: never; Returns: number }
       get_credit_status: { Args: { p_user_id: string }; Returns: Json }

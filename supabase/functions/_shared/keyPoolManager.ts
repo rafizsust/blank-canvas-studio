@@ -122,20 +122,27 @@ export async function checkoutKeyForPart(
     }
   }
   
-  const { data: keyRows, error } = await supabaseService.rpc('checkout_key_for_part', {
+  // Use v2 RPC to bypass any stale PostgREST schema cache and avoid ambiguous column issues
+  const { data: keyRows, error } = await supabaseService.rpc('checkout_key_for_part_v2', {
     p_job_id: jobId,
     p_part_number: partNumber,
     p_lock_duration_seconds: lockDuration,
     p_model_name: modelName,
   });
-  
+
   if (error) {
-    console.error(`[keyPoolManager] checkout_key_for_part error:`, error.message);
+    // Log as much PostgREST detail as possible to make DB issues actionable
+    console.error(`[keyPoolManager] checkout_key_for_part_v2 error:`, {
+      message: error.message,
+      details: (error as any).details,
+      hint: (error as any).hint,
+      code: (error as any).code,
+    });
     return null;
   }
-  
+
   if (!keyRows || keyRows.length === 0) {
-    console.warn(`[keyPoolManager] No available API keys in admin pool for part ${partNumber}`);
+    console.warn(`[keyPoolManager] No available API keys in admin pool for part ${partNumber} (none configured, all cooling down, or daily quota exhausted)`);
     return null;
   }
   

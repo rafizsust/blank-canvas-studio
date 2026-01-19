@@ -359,8 +359,8 @@ serve(async (req) => {
       );
 
       if (!keyResult) {
-        // No keys available - fail gracefully
-        throw new Error('All API keys are currently rate-limited or unavailable. Please try again in a few minutes.');
+        // No keys available - distinguish from "rate limited" because it can also mean no keys configured.
+        throw new Error('No available API keys (no admin keys configured, or all keys are cooling down / quota-exhausted). Please try again in a few minutes.');
       }
 
       currentKeyId = keyResult.keyId;
