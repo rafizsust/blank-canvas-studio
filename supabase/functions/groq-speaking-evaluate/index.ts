@@ -35,20 +35,34 @@ async function callGroqLLMWithTokenFallback(opts: {
   prompt: string;
   maxTokensCandidates: number[];
 }) {
-  // System prompt with STRICT word count enforcement
-  const system = `You are a CERTIFIED IELTS Speaking Examiner. CRITICAL RULES:
+  // System prompt: human-like IELTS examiner (calibrated scoring, generous model answers)
+  const system = `You are a CERTIFIED IELTS Speaking Examiner scoring like a real human examiner would.
 
-1. OUTPUT: Valid JSON ONLY matching the exact schema
-2. COMPLETENESS: EVERY segment_key gets ONE unique modelAnswer - NO skips, NO duplicates
-3. STRICT SCORING: short/off-topic = Band 2-4 MAX
-4. WEAKNESSES: EVERY weakness MUST include a quoted example from transcript
+## SCORING PHILOSOPHY (Human-Like, Not AI-Harsh)
+- IELTS examiners are trained to be FAIR and ENCOURAGING, not punitive.
+- A candidate who speaks coherently on topic for 1-2 minutes in Part 2 typically scores Band 5.5-6.5, even with some errors.
+- Only give Band 4 or below for SEVERE issues: unintelligible speech, extreme brevity (<20 words Part 2), complete off-topic.
+- Fillers (um, uh, like) are NORMAL in natural speech and should NOT heavily penalize fluency.
+- Minor grammatical errors are expected up to Band 7; focus on communication effectiveness.
 
-**MANDATORY MODEL ANSWER WORD COUNTS - YOU MUST FOLLOW THESE:**
-- Part 1 answers: MINIMUM 45 words, target 50-60 words
-- Part 2 answers: MINIMUM 150 words, target 160-180 words (THIS IS CRITICAL)
-- Part 3 answers: MINIMUM 60 words, target 70-85 words
+## HALLUCINATION HANDLING
+- If transcript contains "[FLAGGED_HALLUCINATION:...]", IGNORE that text entirely when scoring.
+- Do NOT penalize candidate for AI-generated artifacts in their transcript.
 
-FAILURE TO MEET WORD COUNTS IS UNACCEPTABLE. Count your words before finalizing.`;
+## OUTPUT REQUIREMENTS
+1. Valid JSON matching exact schema
+2. EVERY segment_key gets ONE unique modelAnswer (no skips, no duplicates)
+3. EVERY weakness MUST include a quoted example from transcript
+
+## MANDATORY MODEL ANSWER WORD COUNTS (COUNT CAREFULLY!)
+- Part 1: MINIMUM 50 words, aim for 55-65 words
+- Part 2: MINIMUM 180 words, aim for 190-210 words (THIS IS CRITICAL)
+- Part 3: MINIMUM 70 words, aim for 80-95 words
+
+## MANDATORY LEXICAL UPGRADES
+- Provide AT LEAST 10 vocabulary upgrades (original → upgraded with context)
+
+FAILURE TO MEET WORD COUNTS OR UPGRADE COUNTS IS UNACCEPTABLE.`;
 
   let lastResponse: Response | null = null;
   for (const maxTokens of opts.maxTokensCandidates) {
@@ -381,7 +395,7 @@ serve(async (req) => {
       };
     });
 
-    // Extract lexical_upgrades - ensure minimum of 5
+    // Extract lexical_upgrades - ensure minimum of 10
     const rawLexicalUpgrades = Array.isArray(evaluation?.lexical_upgrades) ? evaluation.lexical_upgrades : [];
     const lexicalUpgrades = rawLexicalUpgrades.map((u: any) => ({
       original: u.original || '',
@@ -389,8 +403,8 @@ serve(async (req) => {
       context: u.context || '',
     }));
     
-    if (lexicalUpgrades.length < 5) {
-      console.warn(`[groq-speaking-evaluate] Only ${lexicalUpgrades.length} lexical upgrades provided (expected 5+)`);
+    if (lexicalUpgrades.length < 10) {
+      console.warn(`[groq-speaking-evaluate] Only ${lexicalUpgrades.length} lexical upgrades provided (expected 10+)`);
     }
 
     // Extract vocabulary_upgrades (alias)
@@ -606,14 +620,14 @@ function buildEvaluationPrompt(
 
   const totalQuestions = transcriptions.length;
   
-  // Build modelAnswers requirement with EXPLICIT word count enforcement
+  // Build modelAnswers requirement with INCREASED word count enforcement
   const modelAnswersReq = transcriptions.map(t => {
-    // STRICT word counts: P1=45-55w, P2=150-180w, P3=60-85w
+    // INCREASED word counts: P1=50-65w, P2=180-210w, P3=70-95w
     const limits = t.partNumber === 2 
-      ? { min: 150, target: 170 } 
+      ? { min: 180, target: 200 } 
       : t.partNumber === 3 
-        ? { min: 60, target: 75 } 
-        : { min: 45, target: 55 };
+        ? { min: 70, target: 85 } 
+        : { min: 50, target: 60 };
     return `{"segment_key":"${t.segmentKey}","partNumber":${t.partNumber},"questionNumber":${t.questionNumber},"estimatedBand":<1-9>,"modelAnswer":"WRITE ${limits.min}+ WORDS HERE (target ${limits.target}w)","keyImprovements":["<1 tip>"]}`;
   }).join(',');
 
@@ -631,19 +645,26 @@ ${transcriptSection}
 
 **PRONUNCIATION ESTIMATE:** Band ${pronunciationEstimate.estimatedBand} (${pronunciationEstimate.confidence} confidence)
 
-**SCORING GUIDELINES:**
-- Off-topic/irrelevant → Band 2.5-3.5
-- Very short (<10 words) → Band 2-3
-- Nonsense/gibberish → Band 1.5-2.5
+**HUMAN-LIKE SCORING GUIDELINES (be FAIR, not harsh):**
+- On-topic, coherent, 1-2 minutes speaking → Band 5.5-6.5 baseline
+- Minor vocabulary/grammar slips → still Band 5-6 if communication is clear
+- Some hesitation/fillers are NORMAL → don't over-penalize fluency
+- Off-topic/irrelevant → Band 3.5-4.5
+- Very short (<20 words Part 2) → Band 3-4
+- Nonsense/gibberish/unintelligible → Band 2-3
 - Silent/no response → Band 1-2
+- Ignore any "[FLAGGED_HALLUCINATION:...]" spans when scoring
 - EVERY weakness MUST include a direct quote: "Issue description (e.g., '[exact quote from transcript]')"
 
 **CRITICAL - MODEL ANSWER WORD COUNT REQUIREMENTS:**
-⚠️ PART 1: Each answer MUST be AT LEAST 45 words (aim for 50-55 words)
-⚠️ PART 2: Answer MUST be AT LEAST 150 words (aim for 160-180 words) - THIS IS MANDATORY
-⚠️ PART 3: Each answer MUST be AT LEAST 60 words (aim for 70-85 words)
+⚠️ PART 1: Each answer MUST be AT LEAST 50 words (aim for 55-65 words)
+⚠️ PART 2: Answer MUST be AT LEAST 180 words (aim for 190-210 words) - THIS IS MANDATORY
+⚠️ PART 3: Each answer MUST be AT LEAST 70 words (aim for 80-95 words)
 
-WORD COUNTS ARE STRICTLY ENFORCED. Short model answers are UNACCEPTABLE.
+**CRITICAL - LEXICAL UPGRADES REQUIREMENT:**
+⚠️ Provide AT LEAST 10 lexical_upgrades entries (original → upgraded → context)
+
+WORD COUNTS AND UPGRADE COUNTS ARE STRICTLY ENFORCED. Short outputs are UNACCEPTABLE.
 
 **OUTPUT FORMAT (valid JSON only):**
 {
@@ -656,13 +677,13 @@ WORD COUNTS ARE STRICTLY ENFORCED. Short model answers are UNACCEPTABLE.
   "summary": "<2 sentence overall summary>",
   "examiner_notes": "<1 sentence key observation>",
   "modelAnswers": [${modelAnswersReq}],
-  "lexical_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}, ...],
+  "lexical_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}, ... (AT LEAST 10 ENTRIES)],
   "part_notes": [],
   "improvement_priorities": ["...", "..."],
   "strengths_to_maintain": ["..."]
 }
 
-REMEMBER: Part 2 modelAnswer = 150+ words. Part 1 = 45+ words each. Part 3 = 60+ words each. NO EXCEPTIONS.`;
+REMEMBER: Part 2 modelAnswer = 180+ words. Part 1 = 50+ words each. Part 3 = 70+ words each. AT LEAST 10 lexical_upgrades. NO EXCEPTIONS.`;
 }
 
 function getQuestionTextFromPayload(payload: any, partNumber: number, questionNumber: number, segmentKey: string): string {

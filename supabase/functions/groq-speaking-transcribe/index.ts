@@ -73,6 +73,15 @@ const HALLUCINATION_END_PHRASES = [
   /\s*alright\.?\s*$/gi,
 ];
 
+// Leading hallucination phrases Whisper injects at the start (often from context prompt bleed)
+const HALLUCINATION_START_PHRASES = [
+  /^ielts\s+speaking\s+test\.?\s*interview\.?\s*/gi,
+  /^ielts\s+speaking\s+test\.?\s*/gi,
+  /^english\s+language\.?\s*/gi,
+  /^interview\.?\s*/gi,
+  /^welcome\s+to\s+the\s+ielts\s+speaking\s+test\.?\s*/gi,
+];
+
 // Check if text contains hallucination patterns
 function containsHallucinationPatterns(text: string): boolean {
   return HALLUCINATION_PATTERNS.some(pattern => pattern.test(text));
@@ -483,14 +492,13 @@ async function transcribeWithWhisper(
   formData.append('language', 'en');
   formData.append('temperature', '0');  // Reduce randomness to minimize hallucinations
   
-  // Enhanced prompt for whisper-large-v3-turbo to prevent hallucinations during pauses
+  // MINIMAL prompt to avoid Whisper echoing it back into transcripts.
+  // We rely on post-processing to strip artifacts instead of injecting context.
   formData.append('prompt', 
-    'IELTS speaking test interview. English language. ' +
-    'Transcribe exactly what is spoken - nothing more. ' +
+    'Transcribe exactly what is spoken. ' +
     'Include filler words: um, uh, like, you know. ' +
-    'Do NOT add: thank you, thanks for watching, goodbye, subscribe, or any closing phrases. ' +
-    'Silence or pauses should produce no text. ' +
-    'If speech is unclear, use [INAUDIBLE].'
+    'Silence produces no text. ' +
+    'Speech unclear: [INAUDIBLE].'
   );
 
   const response = await fetch(GROQ_API_URL, {
@@ -561,8 +569,15 @@ async function transcribeWithWhisper(
   // Rebuild text from filtered segments
   const filteredText = filteredSegments.map(s => s.text).join(' ').trim();
 
-  // Filter out common hallucination phrases at the end of audio using our patterns
+  // Filter out common hallucination phrases at START and END of audio
   let cleanedText = filteredText;
+  
+  // Strip leading hallucinations first (e.g., "IELTS speaking test interview.")
+  for (const pattern of HALLUCINATION_START_PHRASES) {
+    cleanedText = cleanedText.replace(pattern, '');
+  }
+  
+  // Strip trailing hallucinations
   for (const pattern of HALLUCINATION_END_PHRASES) {
     cleanedText = cleanedText.replace(pattern, '');
   }
