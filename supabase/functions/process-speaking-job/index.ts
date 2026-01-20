@@ -538,6 +538,7 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
   interface KeyCandidate { key: string; keyId: string | null; isUserProvided: boolean; }
   const keyQueue: KeyCandidate[] = [];
 
+  // Check for user's personal API key in user_secrets table
   const { data: userSecret, error: userSecretError } = await supabaseService
     .from('user_secrets')
     .select('encrypted_value')
@@ -552,20 +553,26 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
   if (userSecret?.encrypted_value && appEncryptionKey) {
     try {
       const userKey = await decryptKey(userSecret.encrypted_value, appEncryptionKey);
-      keyQueue.push({ key: userKey, keyId: null, isUserProvided: true });
+      if (userKey && userKey.length > 0) {
+        keyQueue.push({ key: userKey, keyId: null, isUserProvided: true });
+        console.log('[processTextBasedEvaluation] User has personal API key configured, adding to queue');
+      }
     } catch (e) {
-      console.warn('[processTextBasedEvaluation] Failed to decrypt user key:', e);
+      console.warn('[processTextBasedEvaluation] Failed to decrypt user key, skipping user key:', e);
     }
+  } else {
+    console.log('[processTextBasedEvaluation] No personal API key configured for user, using admin pool only');
   }
 
-  // Only use gemini-2.5-flash - no fallback to older models
+  // Add admin keys from pool
   const TEXT_MODELS = ['gemini-2.5-flash'];
   const dbApiKeys = await getActiveGeminiKeysForModels(supabaseService, TEXT_MODELS);
+  console.log(`[processTextBasedEvaluation] Found ${dbApiKeys.length} admin keys in pool`);
   for (const dbKey of dbApiKeys) {
     keyQueue.push({ key: dbKey.key_value, keyId: dbKey.id, isUserProvided: false });
   }
 
-  if (keyQueue.length === 0) throw new Error('No API keys available');
+  if (keyQueue.length === 0) throw new Error('No API keys available (user or admin)');
 
   // Build the prompt
   const prompt = buildTextPrompt(transcripts, topic || testRow.topic, difficulty || testRow.difficulty, fluency_flag, testRow.payload);
@@ -732,25 +739,18 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
     throw new Error('Text evaluation failed: all models/keys exhausted');
   }
 
-  
 
-  // TEXT-BASED EVALUATION PRONUNCIATION PENALTY
+  // TEXT-BASED EVALUATION PRONUNCIATION NOTE
   // Since we can't actually hear the pronunciation in text-based mode,
-  // apply a defensive -0.5 penalty to pronunciation to avoid over-estimating.
-  // This ensures users are not given artificially high pronunciation scores
-  // when the AI is evaluating text transcripts, not actual audio.
+  // add a disclaimer without applying an explicit penalty.
+  // The AI evaluates pronunciation based on speech recognition patterns only.
   if (evaluationResult.criteria?.pronunciation?.band !== undefined) {
-    const originalBand = evaluationResult.criteria.pronunciation.band;
-    const penalizedBand = Math.max(1, originalBand - 0.5); // Don't go below 1
-    evaluationResult.criteria.pronunciation.band = penalizedBand;
     evaluationResult.criteria.pronunciation.disclaimer = 
-      `Text-based evaluation: Pronunciation estimated from speech recognition patterns. ` +
-      `A -0.5 band adjustment has been applied as actual pronunciation cannot be assessed via text. ` +
-      `For accurate pronunciation scoring, use Accuracy Mode which analyzes your actual audio.`;
-    console.log(`[processTextBasedEvaluation] Applied pronunciation penalty: ${originalBand} -> ${penalizedBand}`);
+      `Text-based evaluation: Pronunciation estimated from speech recognition patterns only. ` +
+      `For more accurate pronunciation scoring, use Accuracy Mode which analyzes your actual audio.`;
   }
 
-  // Recalculate overall band after pronunciation penalty
+  // Calculate overall band (no penalty applied)
   const overallBand = evaluationResult.overall_band 
     ? Math.round((
         (evaluationResult.criteria?.fluency_coherence?.band || 5.5) +
@@ -940,7 +940,7 @@ JSON OUTPUT:
       "candidateResponse": "Corrected transcript",
       "estimatedBand": 5.5,
       "targetBand": 6.5,
-      "modelAnswer": "Part1=40w, Part2=140w, Part3=50w",
+      "modelAnswer": "Part1=40w, Part2=130w, Part3=50w",
       "whyItWorks": ["max 2 points"],
       "keyImprovements": ["max 2 points"]
     }
@@ -950,7 +950,7 @@ JSON OUTPUT:
 
 RULES:
 1. Return EXACTLY ${numSegments} modelAnswers with segment_keys: ${orderedSegments.map(s => s.key).join(', ')}
-2. Model answers: Part1=40w, Part2=140w, Part3=50w
+2. Model answers: Part1=40w, Part2=130w, Part3=50w
 3. Max 2 items per array (except areas_for_improvement)
 4. Include max 3 vocabulary_upgrades (omit if none needed)
 5. Include max 3 recognition_corrections for speech errors (omit if none)
