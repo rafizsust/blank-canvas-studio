@@ -8,13 +8,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
  * - Takes transcription results from groq-speaking-transcribe
  * - Estimates pronunciation from transcription confidence scores
  * - Calls Groq Llama 3.3 70B for final IELTS evaluation
- * - Stores results in same format as Gemini for compatibility
+ * - Stores results in EXACT same format as Gemini for UI compatibility
  * 
- * Pronunciation Estimation Algorithm:
- * - Uses word probability (confidence) as clarity proxy
- * - Uses avg_logprob as pronunciation quality indicator
- * - Uses no_speech_prob for silence/mumbling detection
- * - Conservative scoring (caps at 7.0 for estimation)
+ * OUTPUT SCHEMA matches Gemini pipeline exactly:
+ * - criteria with band/score, feedback, strengths, weaknesses, suggestions
+ * - modelAnswers with candidateResponse, modelAnswer, whyItWorks, keyImprovements
+ * - lexical_upgrades and vocabulary_upgrades arrays
+ * - part_analysis with part_number, performance_notes, key_moments, areas_for_improvement
+ * - transcripts_by_part and transcripts_by_question
  */
 
 const corsHeaders = {
@@ -23,7 +24,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Groq LLM API endpoint
 const GROQ_LLM_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 interface PronunciationEstimate {
@@ -132,18 +132,20 @@ serve(async (req) => {
     const pronunciationEstimate = estimatePronunciation(transcriptionResult.transcriptions);
     console.log(`[groq-speaking-evaluate] Pronunciation estimate: ${pronunciationEstimate.estimatedBand} (${pronunciationEstimate.confidence})`);
 
-    // Fetch test details for question context
-    const { data: testData } = await supabaseService
-      .from('speaking_tests')
-      .select('*, speaking_questions(*)')
+    // Fetch AI practice test payload for question context
+    const { data: aiTestRow } = await supabaseService
+      .from('ai_practice_tests')
+      .select('payload')
       .eq('id', job.test_id)
-      .single();
+      .maybeSingle();
 
-    // Build evaluation prompt
+    const testPayload = (aiTestRow as any)?.payload;
+
+    // Build evaluation prompt (Gemini-compatible output schema)
     const evaluationPrompt = buildEvaluationPrompt(
       transcriptionResult.transcriptions,
       pronunciationEstimate,
-      testData,
+      testPayload,
       job
     );
 
@@ -162,7 +164,7 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a certified IELTS Speaking Examiner with 10+ years of experience. Provide accurate, fair assessments following official IELTS band descriptors. Always respond with valid JSON.'
+            content: 'You are a certified IELTS Speaking Examiner with 10+ years of experience. Provide accurate, fair assessments following official IELTS band descriptors. Always respond with valid JSON matching the exact schema requested.'
           },
           {
             role: 'user',
@@ -179,7 +181,6 @@ serve(async (req) => {
       const errorText = await llmResponse.text();
       console.error(`[groq-speaking-evaluate] LLM API error: ${llmResponse.status} - ${errorText}`);
       
-      // Check for rate limit
       if (llmResponse.status === 429) {
         await supabaseService.rpc('mark_groq_key_exhausted', {
           p_key_id: groqKeyId,
@@ -197,7 +198,7 @@ serve(async (req) => {
     console.log(`[groq-speaking-evaluate] LLM response received in ${processingTime}ms`);
 
     // Parse evaluation result
-    let evaluation;
+    let evaluation: any;
     try {
       const content = llmResult.choices?.[0]?.message?.content;
       evaluation = JSON.parse(content);
@@ -206,19 +207,7 @@ serve(async (req) => {
       throw new Error('Failed to parse evaluation response');
     }
 
-    // Add metadata
-    evaluation.evaluationMetadata = {
-      provider: 'groq',
-      sttModel: 'whisper-large-v3-turbo',
-      llmModel: 'llama-3.3-70b-versatile',
-      pronunciationEstimation: pronunciationEstimate,
-      processingTimeMs: processingTime,
-      transcriptionSegments: transcriptionResult.transcriptions.length,
-      totalAudioSeconds: transcriptionResult.totalAudioSeconds,
-    };
-
-    // Store result (same format as Gemini for compatibility)
-    // Build audio URLs for result storage
+    // Build audio URLs
     const publicBase = (Deno.env.get('R2_PUBLIC_URL') || '').replace(/\/$/, '');
     const filePaths = job.file_paths as Record<string, string> || {};
     const audioUrls: Record<string, string> = {};
@@ -228,69 +217,159 @@ serve(async (req) => {
       }
     }
 
-    // Build transcripts by part from transcription result
+    // Build transcripts matching Gemini format
     const transcriptsByPart: Record<string, string> = {};
-    const transcriptsByQuestion: Record<string, string> = {};
+    const transcriptsByQuestion: Record<string, any[]> = {};
+    
     for (const t of transcriptionResult.transcriptions) {
-      const partKey = `part${t.partNumber}`;
+      const partKey = String(t.partNumber);
+      
+      // transcripts_by_part: { "1": "full text", "2": "full text", ... }
       if (!transcriptsByPart[partKey]) {
         transcriptsByPart[partKey] = t.text;
       } else {
         transcriptsByPart[partKey] += ' ' + t.text;
       }
-      transcriptsByQuestion[t.segmentKey] = t.text;
+      
+      // transcripts_by_question: { "1": [...], "2": [...], "3": [...] }
+      if (!transcriptsByQuestion[partKey]) {
+        transcriptsByQuestion[partKey] = [];
+      }
+      
+      // Find question text from payload
+      const questionText = getQuestionTextFromPayload(testPayload, t.partNumber, t.questionNumber, t.segmentKey);
+      
+      transcriptsByQuestion[partKey].push({
+        question_number: t.questionNumber,
+        question_text: questionText,
+        transcript: t.text,
+        segment_key: t.segmentKey,
+      });
     }
 
-    // Format result to match Gemini output structure for UI compatibility
-    const finalResult = {
-      overall_band: evaluation.overallBand,
-      fluency_coherence: { 
-        score: evaluation.criteriaScores?.fluencyCoherence || 5.0,
-        feedback: evaluation.detailedFeedback?.fluencyCoherence || '',
-      },
-      lexical_resource: { 
-        score: evaluation.criteriaScores?.lexicalResource || 5.0,
-        feedback: evaluation.detailedFeedback?.lexicalResource || '',
-      },
-      grammatical_range: { 
-        score: evaluation.criteriaScores?.grammaticalRange || 5.0,
-        feedback: evaluation.detailedFeedback?.grammaticalRange || '',
-      },
-      pronunciation: { 
-        score: evaluation.criteriaScores?.pronunciation || 5.0,
-        feedback: evaluation.detailedFeedback?.pronunciation || '',
-      },
-      strengths: evaluation.feedback?.strengths || [],
-      areas_for_improvement: evaluation.feedback?.areasForImprovement || [],
-      tips: evaluation.feedback?.tips || [],
-      transcripts_by_part: transcriptsByPart,
-      transcripts_by_question: transcriptsByQuestion,
-      part_analysis: evaluation.partAnalysis || {},
-      evaluationMetadata: evaluation.evaluationMetadata,
+    // Extract criteria with full Gemini-compatible structure
+    const extractCriterion = (key: string, camelKey: string) => {
+      const c = evaluation?.criteria?.[key] || evaluation?.criteria?.[camelKey] || {};
+      return {
+        band: typeof c.band === 'number' ? c.band : (typeof c.score === 'number' ? c.score : 5.0),
+        feedback: c.feedback || '',
+        strengths: Array.isArray(c.strengths) ? c.strengths : [],
+        weaknesses: Array.isArray(c.weaknesses) ? c.weaknesses : [],
+        suggestions: Array.isArray(c.suggestions) ? c.suggestions : [],
+      };
     };
 
-    // Calculate time spent from durations
+    const criteria = {
+      fluency_coherence: extractCriterion('fluency_coherence', 'fluencyCoherence'),
+      lexical_resource: extractCriterion('lexical_resource', 'lexicalResource'),
+      grammatical_range: extractCriterion('grammatical_range', 'grammaticalRange'),
+      pronunciation: extractCriterion('pronunciation', 'pronunciation'),
+    };
+
+    // Compute overall band using IELTS rounding rules (same as frontend)
+    const criteriaScores = [
+      criteria.fluency_coherence.band,
+      criteria.lexical_resource.band,
+      criteria.grammatical_range.band,
+      criteria.pronunciation.band,
+    ];
+    const avgScore = criteriaScores.reduce((a, b) => a + b, 0) / 4;
+    const overallBand = roundIELTSBand(avgScore);
+
+    console.log(`[groq-speaking-evaluate] Criteria: FC=${criteria.fluency_coherence.band}, LR=${criteria.lexical_resource.band}, GRA=${criteria.grammatical_range.band}, P=${criteria.pronunciation.band} => Overall=${overallBand}`);
+
+    // Extract modelAnswers with full structure
+    const modelAnswers = Array.isArray(evaluation?.modelAnswers) 
+      ? evaluation.modelAnswers.map((m: any) => ({
+          segment_key: m.segment_key || m.segmentKey || '',
+          partNumber: typeof m.partNumber === 'number' ? m.partNumber : (typeof m.part_number === 'number' ? m.part_number : 0),
+          questionNumber: typeof m.questionNumber === 'number' ? m.questionNumber : (typeof m.question_number === 'number' ? m.question_number : 0),
+          question: m.question || m.question_text || '',
+          candidateResponse: m.candidateResponse || m.candidate_response || m.transcript || '',
+          estimatedBand: typeof m.estimatedBand === 'number' ? m.estimatedBand : undefined,
+          targetBand: typeof m.targetBand === 'number' ? m.targetBand : undefined,
+          modelAnswer: m.modelAnswer || m.model_answer || '',
+          whyItWorks: Array.isArray(m.whyItWorks) ? m.whyItWorks : (Array.isArray(m.why_it_works) ? m.why_it_works : []),
+          keyImprovements: Array.isArray(m.keyImprovements) ? m.keyImprovements : (Array.isArray(m.key_improvements) ? m.key_improvements : []),
+        }))
+      : [];
+
+    // Extract lexical_upgrades
+    const lexicalUpgrades = Array.isArray(evaluation?.lexical_upgrades)
+      ? evaluation.lexical_upgrades.map((u: any) => ({
+          original: u.original || '',
+          upgraded: u.upgraded || '',
+          context: u.context || '',
+        }))
+      : [];
+
+    // Extract vocabulary_upgrades (alias)
+    const vocabularyUpgrades = Array.isArray(evaluation?.vocabulary_upgrades)
+      ? evaluation.vocabulary_upgrades.map((u: any) => ({
+          original: u.original || '',
+          upgraded: u.upgraded || '',
+          context: u.context || '',
+        }))
+      : lexicalUpgrades; // Fallback to lexical_upgrades if not provided
+
+    // Extract part_analysis with full structure
+    const partAnalysis = Array.isArray(evaluation?.part_analysis)
+      ? evaluation.part_analysis.map((p: any) => ({
+          part_number: typeof p.part_number === 'number' ? p.part_number : (typeof p.partNumber === 'number' ? p.partNumber : 0),
+          performance_notes: p.performance_notes || p.performanceNotes || p.comment || '',
+          key_moments: Array.isArray(p.key_moments) ? p.key_moments : (Array.isArray(p.keyMoments) ? p.keyMoments : []),
+          areas_for_improvement: Array.isArray(p.areas_for_improvement) ? p.areas_for_improvement : (Array.isArray(p.areasForImprovement) ? p.areasForImprovement : []),
+        }))
+      : [];
+
+    // Build final result matching Gemini schema exactly
+    const finalResult = {
+      overall_band: overallBand,
+      criteria,
+      summary: evaluation?.summary || evaluation?.examiner_notes || 'Evaluation complete.',
+      examiner_notes: evaluation?.examiner_notes || evaluation?.summary || '',
+      modelAnswers,
+      lexical_upgrades: lexicalUpgrades,
+      vocabulary_upgrades: vocabularyUpgrades,
+      part_analysis: partAnalysis,
+      improvement_priorities: Array.isArray(evaluation?.improvement_priorities) ? evaluation.improvement_priorities : [],
+      strengths_to_maintain: Array.isArray(evaluation?.strengths_to_maintain) ? evaluation.strengths_to_maintain : [],
+      transcripts_by_part: transcriptsByPart,
+      transcripts_by_question: transcriptsByQuestion,
+      evaluationMetadata: {
+        provider: 'groq',
+        sttModel: 'whisper-large-v3-turbo',
+        llmModel: 'llama-3.3-70b-versatile',
+        pronunciationEstimation: pronunciationEstimate,
+        processingTimeMs: processingTime,
+        transcriptionSegments: transcriptionResult.transcriptions.length,
+        totalAudioSeconds: transcriptionResult.totalAudioSeconds,
+      },
+    };
+
+    // Calculate time spent
     const durations = job.durations as Record<string, number> || {};
     const timeSpentSeconds = Object.values(durations).reduce((a: number, b: number) => a + b, 0) || 60;
 
-    // Calculate evaluation timing
+    // Evaluation timing
     const jobStartTime = new Date(job.created_at).getTime();
     const totalTimeMs = Date.now() - jobStartTime;
     const evaluationTiming = {
       totalTimeMs,
       processingTimeMs: processingTime,
       provider: 'groq',
+      timing: { total: totalTimeMs },
     };
 
-    // Save result to ai_practice_results (same as Gemini)
+    // Save result to ai_practice_results (same schema as Gemini)
     const { data: resultRow, error: saveError } = await supabaseService
       .from('ai_practice_results')
       .insert({
         test_id: job.test_id,
         user_id: job.user_id,
         module: 'speaking',
-        score: Math.round(evaluation.overallBand * 10),
-        band_score: evaluation.overallBand,
+        score: Math.round(overallBand * 10),
+        band_score: overallBand,
         total_questions: transcriptionResult.transcriptions.length,
         time_spent_seconds: Math.round(timeSpentSeconds),
         question_results: finalResult,
@@ -312,13 +391,13 @@ serve(async (req) => {
       console.log(`[groq-speaking-evaluate] Result saved to ai_practice_results: ${resultRow?.id}`);
     }
 
-    // Mark job completed with result_id reference
+    // Mark job completed
     await supabaseService
       .from('speaking_evaluation_jobs')
       .update({
         status: 'completed',
         stage: 'completed',
-        partial_results: evaluation,
+        partial_results: { ...evaluation, overallBand },
         result_id: resultRow?.id || null,
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -326,11 +405,11 @@ serve(async (req) => {
       })
       .eq('id', jobId);
 
-    console.log(`[groq-speaking-evaluate] Evaluation complete. Overall band: ${evaluation.overallBand}`);
+    console.log(`[groq-speaking-evaluate] Evaluation complete. Overall band: ${overallBand}`);
 
     return new Response(JSON.stringify({
       success: true,
-      overallBand: evaluation.overallBand,
+      overallBand,
       processingTimeMs: processingTime,
       resultId: resultRow?.id,
     }), {
@@ -341,15 +420,26 @@ serve(async (req) => {
   } catch (error: any) {
     console.error('[groq-speaking-evaluate] Error:', error);
 
-    // Note: We can't re-parse req.json() here as body is already consumed.
-    // The job runner watchdog will handle updating the job status.
-
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
+
+// ============================================================================
+// IELTS Band Rounding (same as frontend)
+// ============================================================================
+
+function roundIELTSBand(rawAverage: number): number {
+  if (!Number.isFinite(rawAverage)) return 0;
+  const avg = Math.max(0, Math.min(9, rawAverage));
+  const floor = Math.floor(avg);
+  const fraction = avg - floor;
+  if (fraction < 0.25) return floor;
+  if (fraction < 0.75) return floor + 0.5;
+  return floor + 1;
+}
 
 // ============================================================================
 // Pronunciation Estimation
@@ -360,41 +450,32 @@ function estimatePronunciation(transcriptions: TranscriptionSegment[]): Pronunci
     return { estimatedBand: 5.0, confidence: 'low', evidence: ['No transcription data'] };
   }
 
-  // Aggregate metrics across all segments
   const totalWords = transcriptions.reduce((sum, t) => sum + t.wordCount, 0);
-  const weightedConfidence = transcriptions.reduce((sum, t) => sum + (t.avgConfidence * t.wordCount), 0) / totalWords;
+  const weightedConfidence = transcriptions.reduce((sum, t) => sum + (t.avgConfidence * t.wordCount), 0) / Math.max(1, totalWords);
   const avgLogprob = transcriptions.reduce((sum, t) => sum + t.avgLogprob, 0) / transcriptions.length;
   
-  // Count issues
   const totalFillerWords = transcriptions.reduce((sum, t) => sum + t.fillerWords.length, 0);
   const totalLongPauses = transcriptions.reduce((sum, t) => sum + t.longPauses.length, 0);
   const fillerRatio = totalFillerWords / Math.max(1, totalWords);
 
-  // Normalize logprob (typically -1 to 0, closer to 0 is better)
-  // Map to 0-1 scale where 1 is best
   const normalizedClarity = Math.max(0, Math.min(1, (avgLogprob + 1)));
 
-  // Calculate score components (0-1 scale)
-  const confidenceScore = weightedConfidence; // Already 0-1
+  const confidenceScore = weightedConfidence;
   const clarityScore = normalizedClarity;
   const fluencyPenalty = Math.min(0.3, fillerRatio * 0.5 + (totalLongPauses * 0.02));
   const pausePenalty = Math.min(0.2, totalLongPauses * 0.03);
 
-  // Weighted composite score
   const compositeScore = (
-    confidenceScore * 0.35 +      // Word recognition confidence
-    clarityScore * 0.30 +          // Overall audio clarity
-    (1 - fluencyPenalty) * 0.20 +  // Fluency (fewer fillers = better)
-    (1 - pausePenalty) * 0.15      // Pause management
+    confidenceScore * 0.35 +
+    clarityScore * 0.30 +
+    (1 - fluencyPenalty) * 0.20 +
+    (1 - pausePenalty) * 0.15
   );
 
-  // Map to IELTS band (conservative: max 7.0 for estimation)
-  // Score 0.9+ = 7.0, 0.8 = 6.5, 0.7 = 6.0, etc.
-  const rawBand = compositeScore * 6 + 3; // Maps 0-1 to 3-9
-  const cappedBand = Math.min(7.0, rawBand); // Cap at 7.0 for estimation
-  const estimatedBand = Math.round(cappedBand * 2) / 2; // Round to nearest 0.5
+  const rawBand = compositeScore * 6 + 3;
+  const cappedBand = Math.min(7.0, rawBand);
+  const estimatedBand = Math.round(cappedBand * 2) / 2;
 
-  // Determine confidence level
   let confidence: 'low' | 'medium' | 'high' = 'medium';
   if (totalWords < 50) {
     confidence = 'low';
@@ -415,20 +496,21 @@ function estimatePronunciation(transcriptions: TranscriptionSegment[]): Pronunci
 }
 
 // ============================================================================
-// Prompt Builder
+// Prompt Builder (Gemini-compatible output schema)
 // ============================================================================
 
 function buildEvaluationPrompt(
   transcriptions: TranscriptionSegment[],
   pronunciationEstimate: PronunciationEstimate,
-  testData: any,
+  testPayload: any,
   job: any
 ): string {
   // Build transcript section with metadata
   const transcriptSection = transcriptions.map(t => {
-    const questionText = getQuestionText(testData, t.partNumber, t.questionNumber);
+    const questionText = getQuestionTextFromPayload(testPayload, t.partNumber, t.questionNumber, t.segmentKey);
     return `
 ## Part ${t.partNumber}, Question ${t.questionNumber}
+**Segment Key:** ${t.segmentKey}
 **Question:** ${questionText || 'N/A'}
 **Transcript:** "${t.text}"
 **Duration:** ${t.duration.toFixed(1)}s | **Words:** ${t.wordCount}
@@ -438,12 +520,15 @@ function buildEvaluationPrompt(
 `;
   }).join('\n');
 
+  // Build segment keys list for modelAnswers
+  const segmentKeys = transcriptions.map(t => t.segmentKey);
+
   return `
 # IELTS Speaking Test Evaluation
 
 ## Instructions
-You are evaluating an IELTS Speaking test. The transcripts below were generated from audio recordings using Whisper STT.
-Pronunciation scores are **estimated** from transcription confidence (not direct audio analysis).
+You are evaluating an IELTS Speaking test. Provide a comprehensive evaluation matching the official IELTS format.
+The transcripts below were generated from audio recordings using Whisper STT.
 
 ## Topic
 ${job.topic || 'General IELTS Speaking'}
@@ -459,56 +544,122 @@ ${transcriptSection}
 **Confidence:** ${pronunciationEstimate.confidence}
 ${pronunciationEstimate.evidence.map(e => `- ${e}`).join('\n')}
 
-**Note:** Pronunciation is estimated from word recognition confidence and audio clarity metrics, not direct prosody analysis. Use this as a guide and adjust based on overall transcript quality.
-
 ## Evaluation Task
 
-Evaluate the candidate on all four IELTS Speaking criteria:
+Evaluate the candidate on all four IELTS Speaking criteria. Provide detailed, actionable feedback.
 
-1. **Fluency and Coherence (FC)** - Flow, pace, hesitation, coherence, discourse markers
-2. **Lexical Resource (LR)** - Vocabulary range, accuracy, appropriateness, paraphrasing
-3. **Grammatical Range and Accuracy (GRA)** - Sentence structures, grammatical accuracy, complexity
-4. **Pronunciation (P)** - Use the estimated band as a baseline, adjust based on transcript patterns
+## CRITICAL: Response Format
 
-## Response Format
+You MUST return a JSON object with this EXACT structure:
 
-Return a JSON object with this exact structure:
 {
-  "overallBand": <number 1-9 in 0.5 increments>,
-  "criteriaScores": {
-    "fluencyCoherence": <number>,
-    "lexicalResource": <number>,
-    "grammaticalRange": <number>,
-    "pronunciation": <number>
+  "criteria": {
+    "fluency_coherence": {
+      "band": <number 1-9 in 0.5 increments>,
+      "feedback": "<2-3 sentence detailed feedback>",
+      "strengths": ["<specific strength with example from transcript>", "<another strength>"],
+      "weaknesses": ["<specific weakness with example quote from transcript>", "<another weakness>"],
+      "suggestions": ["<actionable improvement tip>", "<another tip>"]
+    },
+    "lexical_resource": {
+      "band": <number>,
+      "feedback": "<2-3 sentence detailed feedback>",
+      "strengths": ["<strength>"],
+      "weaknesses": ["<weakness with example>"],
+      "suggestions": ["<tip>"]
+    },
+    "grammatical_range": {
+      "band": <number>,
+      "feedback": "<2-3 sentence detailed feedback>",
+      "strengths": ["<strength>"],
+      "weaknesses": ["<weakness with example>"],
+      "suggestions": ["<tip>"]
+    },
+    "pronunciation": {
+      "band": <number - use ${pronunciationEstimate.estimatedBand} as baseline>,
+      "feedback": "<feedback noting this is estimated from transcription confidence>",
+      "strengths": ["<strength>"],
+      "weaknesses": ["<weakness>"],
+      "suggestions": ["<tip>"]
+    }
   },
-  "feedback": {
-    "strengths": ["<strength 1>", "<strength 2>", ...],
-    "areasForImprovement": ["<area 1>", "<area 2>", ...],
-    "tips": ["<tip 1>", "<tip 2>", ...]
-  },
-  "detailedFeedback": {
-    "fluencyCoherence": "<2-3 sentence feedback>",
-    "lexicalResource": "<2-3 sentence feedback>",
-    "grammaticalRange": "<2-3 sentence feedback>",
-    "pronunciation": "<2-3 sentence feedback>"
-  },
-  "partAnalysis": {
-    "part1": { "score": <number>, "comment": "<brief comment>" },
-    "part2": { "score": <number>, "comment": "<brief comment>" },
-    "part3": { "score": <number>, "comment": "<brief comment>" }
-  }
+  "summary": "<2-3 sentence overall assessment>",
+  "examiner_notes": "<1 sentence on most critical improvement area>",
+  "modelAnswers": [
+    {
+      "segment_key": "${segmentKeys[0] || 'part1-q1'}",
+      "partNumber": ${transcriptions[0]?.partNumber || 1},
+      "questionNumber": ${transcriptions[0]?.questionNumber || 1},
+      "question": "<question text>",
+      "candidateResponse": "<cleaned transcript from above>",
+      "estimatedBand": <number - band for this specific response>,
+      "targetBand": <number - realistic target band (estimatedBand + 1)>,
+      "modelAnswer": "<FULL model answer: Part1=40 words, Part2=140 words, Part3=55 words - ALWAYS PROVIDE>",
+      "whyItWorks": ["<reason 1>", "<reason 2>"],
+      "keyImprovements": ["<specific improvement 1>", "<improvement 2>"]
+    }
+  ],
+  "lexical_upgrades": [
+    {"original": "<word/phrase from transcript>", "upgraded": "<better alternative>", "context": "<sentence showing usage>"},
+    {"original": "...", "upgraded": "...", "context": "..."},
+    {"original": "...", "upgraded": "...", "context": "..."}
+  ],
+  "vocabulary_upgrades": [
+    {"original": "<basic word>", "upgraded": "<advanced alternative>", "context": "<example sentence>"}
+  ],
+  "part_analysis": [
+    {
+      "part_number": ${transcriptions[0]?.partNumber || 1},
+      "performance_notes": "<1-2 sentence assessment of this part>",
+      "key_moments": ["<positive moment with quote>", "<another positive>"],
+      "areas_for_improvement": ["<specific issue with quote from transcript>", "<another issue>", "<another issue>"]
+    }
+  ],
+  "improvement_priorities": ["<most important area to improve>", "<second priority>"],
+  "strengths_to_maintain": ["<key strength to keep developing>", "<another strength>"]
 }
+
+IMPORTANT RULES:
+1. Provide AT LEAST 3 lexical_upgrades with real examples from the transcript
+2. modelAnswers MUST include a full model answer (not just improvements)
+3. Each criterion MUST have at least 2 strengths, 2 weaknesses, and 2 suggestions
+4. Quote directly from the transcript when giving examples
+5. part_analysis MUST include at least 3 areas_for_improvement with specific examples
+6. Be fair but honest - this is an IELTS evaluation
 
 Be fair, consistent, and follow official IELTS band descriptors.
 `;
 }
 
-function getQuestionText(testData: any, partNumber: number, questionNumber: number): string {
-  if (!testData?.speaking_questions) return '';
+function getQuestionTextFromPayload(payload: any, partNumber: number, questionNumber: number, segmentKey: string): string {
+  if (!payload?.speakingParts) return '';
   
-  const question = testData.speaking_questions.find(
-    (q: any) => q.part_number === partNumber && q.question_order === questionNumber
-  );
+  const parts = Array.isArray(payload.speakingParts) ? payload.speakingParts : [];
   
-  return question?.question_text || '';
+  for (const part of parts) {
+    if (part?.part_number === partNumber || part?.partNumber === partNumber) {
+      // For Part 2, return cue card topic
+      if (partNumber === 2 && part.cue_card_topic) {
+        return part.cue_card_topic;
+      }
+      
+      const questions = Array.isArray(part.questions) ? part.questions : [];
+      
+      // Try to match by question ID from segment key
+      const qUuidMatch = segmentKey.match(/q([0-9a-f\-]{8,})/i);
+      if (qUuidMatch) {
+        const qId = qUuidMatch[1];
+        const matchedQ = questions.find((q: any) => q.id === qId);
+        if (matchedQ?.question_text) return matchedQ.question_text;
+      }
+      
+      // Fallback to question number
+      const matchedQ = questions.find((q: any) => 
+        q.question_number === questionNumber || questions.indexOf(q) === questionNumber - 1
+      );
+      if (matchedQ?.question_text) return matchedQ.question_text;
+    }
+  }
+  
+  return '';
 }
