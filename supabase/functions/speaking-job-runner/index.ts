@@ -114,15 +114,16 @@ serve(async (req) => {
 
         if (retryCount >= maxRetries && !forceRetry) {
           // Check if we should fallback to Gemini for Groq jobs
-          if (jobProvider === 'groq' && autoFallback) {
-            console.log(`[speaking-job-runner] Job ${job.id} Groq failed, falling back to Gemini`);
+          // CRITICAL: Only fallback if auto_fallback_enabled is explicitly true
+          if (jobProvider === 'groq' && autoFallback === true) {
+            console.log(`[speaking-job-runner] Job ${job.id} Groq failed, auto-fallback enabled, falling back to Gemini`);
             await supabaseService
               .from('speaking_evaluation_jobs')
               .update({
                 status: 'pending',
                 stage: 'pending_upload',
                 provider: 'gemini',
-                last_error: `Groq failed after ${retryCount} attempts, falling back to Gemini`,
+                last_error: `Groq failed after ${retryCount} attempts, falling back to Gemini (auto-fallback enabled)`,
                 retry_count: 0, // Reset retry count for Gemini
                 lock_token: null,
                 lock_expires_at: null,
@@ -131,13 +132,17 @@ serve(async (req) => {
               .eq('id', job.id);
             results.stuckJobsReset++;
           } else {
-            // Mark as failed
+            // Mark as failed (no fallback - either not Groq, or auto-fallback is disabled)
+            const failReason = jobProvider === 'groq' && autoFallback === false 
+              ? `Groq failed after ${retryCount} attempts (auto-fallback disabled)`
+              : `Job stuck in ${job.stage} stage after ${retryCount} attempts`;
+            
             await supabaseService
               .from('speaking_evaluation_jobs')
               .update({
                 status: 'failed',
                 stage: 'failed',
-                last_error: `Watchdog: Job stuck in ${job.stage} stage after ${retryCount} attempts`,
+                last_error: `Watchdog: ${failReason}`,
                 retry_count: retryCount,
                 lock_token: null,
                 lock_expires_at: null,
@@ -145,7 +150,7 @@ serve(async (req) => {
               })
               .eq('id', job.id);
             
-            console.log(`[speaking-job-runner] Job ${job.id} marked as failed (max retries)`);
+            console.log(`[speaking-job-runner] Job ${job.id} marked as failed: ${failReason}`);
           }
         } else {
           // Reset for retry

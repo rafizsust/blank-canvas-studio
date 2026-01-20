@@ -218,13 +218,108 @@ serve(async (req) => {
     };
 
     // Store result (same format as Gemini for compatibility)
-    // Store result in partial_results (same format as Gemini for compatibility)
+    // Build audio URLs for result storage
+    const publicBase = (Deno.env.get('R2_PUBLIC_URL') || '').replace(/\/$/, '');
+    const filePaths = job.file_paths as Record<string, string> || {};
+    const audioUrls: Record<string, string> = {};
+    if (publicBase) {
+      for (const [k, r2Key] of Object.entries(filePaths)) {
+        audioUrls[k] = `${publicBase}/${String(r2Key).replace(/^\//, '')}`;
+      }
+    }
+
+    // Build transcripts by part from transcription result
+    const transcriptsByPart: Record<string, string> = {};
+    const transcriptsByQuestion: Record<string, string> = {};
+    for (const t of transcriptionResult.transcriptions) {
+      const partKey = `part${t.partNumber}`;
+      if (!transcriptsByPart[partKey]) {
+        transcriptsByPart[partKey] = t.text;
+      } else {
+        transcriptsByPart[partKey] += ' ' + t.text;
+      }
+      transcriptsByQuestion[t.segmentKey] = t.text;
+    }
+
+    // Format result to match Gemini output structure for UI compatibility
+    const finalResult = {
+      overall_band: evaluation.overallBand,
+      fluency_coherence: { 
+        score: evaluation.criteriaScores?.fluencyCoherence || 5.0,
+        feedback: evaluation.detailedFeedback?.fluencyCoherence || '',
+      },
+      lexical_resource: { 
+        score: evaluation.criteriaScores?.lexicalResource || 5.0,
+        feedback: evaluation.detailedFeedback?.lexicalResource || '',
+      },
+      grammatical_range: { 
+        score: evaluation.criteriaScores?.grammaticalRange || 5.0,
+        feedback: evaluation.detailedFeedback?.grammaticalRange || '',
+      },
+      pronunciation: { 
+        score: evaluation.criteriaScores?.pronunciation || 5.0,
+        feedback: evaluation.detailedFeedback?.pronunciation || '',
+      },
+      strengths: evaluation.feedback?.strengths || [],
+      areas_for_improvement: evaluation.feedback?.areasForImprovement || [],
+      tips: evaluation.feedback?.tips || [],
+      transcripts_by_part: transcriptsByPart,
+      transcripts_by_question: transcriptsByQuestion,
+      part_analysis: evaluation.partAnalysis || {},
+      evaluationMetadata: evaluation.evaluationMetadata,
+    };
+
+    // Calculate time spent from durations
+    const durations = job.durations as Record<string, number> || {};
+    const timeSpentSeconds = Object.values(durations).reduce((a: number, b: number) => a + b, 0) || 60;
+
+    // Calculate evaluation timing
+    const jobStartTime = new Date(job.created_at).getTime();
+    const totalTimeMs = Date.now() - jobStartTime;
+    const evaluationTiming = {
+      totalTimeMs,
+      processingTimeMs: processingTime,
+      provider: 'groq',
+    };
+
+    // Save result to ai_practice_results (same as Gemini)
+    const { data: resultRow, error: saveError } = await supabaseService
+      .from('ai_practice_results')
+      .insert({
+        test_id: job.test_id,
+        user_id: job.user_id,
+        module: 'speaking',
+        score: Math.round(evaluation.overallBand * 10),
+        band_score: evaluation.overallBand,
+        total_questions: transcriptionResult.transcriptions.length,
+        time_spent_seconds: Math.round(timeSpentSeconds),
+        question_results: finalResult,
+        answers: {
+          audio_urls: audioUrls,
+          transcripts_by_part: transcriptsByPart,
+          transcripts_by_question: transcriptsByQuestion,
+          file_paths: filePaths,
+        },
+        evaluation_timing: evaluationTiming,
+        completed_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (saveError) {
+      console.error('[groq-speaking-evaluate] Save error:', saveError);
+    } else {
+      console.log(`[groq-speaking-evaluate] Result saved to ai_practice_results: ${resultRow?.id}`);
+    }
+
+    // Mark job completed with result_id reference
     await supabaseService
       .from('speaking_evaluation_jobs')
       .update({
         status: 'completed',
         stage: 'completed',
         partial_results: evaluation,
+        result_id: resultRow?.id || null,
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         last_error: null,
@@ -237,6 +332,7 @@ serve(async (req) => {
       success: true,
       overallBand: evaluation.overallBand,
       processingTimeMs: processingTime,
+      resultId: resultRow?.id,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
