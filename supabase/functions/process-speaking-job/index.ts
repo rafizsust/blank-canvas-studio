@@ -902,7 +902,7 @@ function buildTextPrompt(
 
   const numSegments = orderedSegments.length;
 
-  return `IELTS Speaking Examiner - Evaluate strictly per official band descriptors.
+  return `You are a SENIOR CERTIFIED IELTS Speaking Examiner with 15+ years of experience. Evaluate STRICTLY per official IELTS band descriptors. Be HARSH but FAIR - like a real IELTS examiner.
 
 CONTEXT: Topic: ${topic} | Difficulty: ${difficulty} | Responses: ${numSegments}
 ${fluencyFlag ? '⚠️ Part 2 under 80s - apply fluency penalty.' : ''}
@@ -910,24 +910,96 @@ ${fluencyFlag ? '⚠️ Part 2 under 80s - apply fluency penalty.' : ''}
 CANDIDATE RESPONSES (Speech Recognition Transcripts):
 ${segmentSummaries}
 
-BAND DESCRIPTORS:
-FC: 9=fluent | 7=at length | 5=flow with repetition | 4=pauses
-LR: 9=idiomatic | 7=less common vocab | 5=limited | 4=basic
-GR: 9=full range | 7=complex/error-free | 5=basic | 4=basic only
-PR: 9=precise | 7=Band 8 features | 5=issues | 4=unintelligible (auto -0.5)
+═══════════════════════════════════════════════════════════════
+🚨 CRITICAL: STRICT SCORING FOR INADEQUATE RESPONSES 🚨
+═══════════════════════════════════════════════════════════════
+
+A real IELTS examiner would NEVER give high scores for minimal responses.
+Apply these MANDATORY penalties:
+
+RESPONSE LENGTH PENALTIES (STRICTLY ENFORCED):
+- NO RESPONSE / Silence / Just says "pass" / "skip": Band 1.0-2.0
+- 1-5 words (e.g., "I don't know", "Maybe yes"): Band 2.0-2.5 MAXIMUM
+- 6-15 words (one short sentence): Band 3.0-3.5 MAXIMUM
+- 16-30 words (2-3 basic sentences): Band 4.0-4.5 MAXIMUM
+- 31-50 words (underdeveloped): Band 4.5-5.0 MAXIMUM
+
+For Part 2 SPECIFICALLY (Long Turn - should be 1.5-2 minutes):
+- Under 60 words: Band 3.0-4.0 MAXIMUM (severely insufficient)
+- 60-100 words: Band 4.5-5.0 MAXIMUM (insufficient length)
+- 100-150 words: Band 5.0-6.0 (minimum acceptable)
+- 150-200 words: Band 6.0-7.0 (adequate development)
+- 200+ words: Can score 7.0+ if quality is good
+
+REAL EXAMINER MINDSET:
+- Would YOU give someone 6.5 for saying "I think yes" or "would be very crucial"?
+- A 6.5 means "good command of English" - 3-5 word responses show NO command
+- Short responses = LIMITED vocabulary, LIMITED grammar, POOR fluency
+- If transcript shows hesitation/minimal content, score MUST reflect this
+
+═══════════════════════════════════════════════════════════════
+MODEL ANSWER REQUIREMENTS (STRICTLY ENFORCED!)
+═══════════════════════════════════════════════════════════════
+
+You MUST provide model answers for ALL ${numSegments} questions, even if the 
+candidate's transcript shows "(Transcript unavailable)" or is empty.
+
+MODEL ANSWER WORD COUNTS (MUST FOLLOW EXACTLY):
+- Part 1: 35-45 words (natural, conversational with 1-2 supporting details)
+- Part 2: 130-150 words (MANDATORY - covers all cue card points with examples)
+- Part 3: 50-60 words (analytical response with reasoning and example)
+
+For Part 2, your model answer MUST:
+1. Be 130-150 words (COUNT THEM!)
+2. Address ALL bullet points from the cue card
+3. Include personal examples and details
+4. Use a variety of vocabulary and sentence structures
+5. Be a complete, well-organized monologue
+
+═══════════════════════════════════════════════════════════════
+BAND DESCRIPTORS (OFFICIAL IELTS)
+═══════════════════════════════════════════════════════════════
+
+FLUENCY & COHERENCE:
+- Band 9: Fluent with rare hesitation, coherent argument
+- Band 7: Speaks at length without noticeable effort
+- Band 5: Maintains flow with noticeable pauses, repetition
+- Band 4: Cannot respond without frequent pauses, limited linking
+- Band 3: Long pauses, limited ability to link simple sentences
+
+LEXICAL RESOURCE:
+- Band 9: Wide range, precise meaning, natural idioms
+- Band 7: Flexible vocabulary, paraphrasing
+- Band 5: Limited vocabulary for less common topics
+- Band 4: Basic vocabulary, repetition
+- Band 3: Very limited vocabulary, only simple words
+
+GRAMMATICAL RANGE & ACCURACY:
+- Band 9: Full range, consistently accurate
+- Band 7: Complex structures, frequent accuracy
+- Band 5: Basic sentence forms only, errors common
+- Band 4: Basic sentences, subordinate clauses rare
+- Band 3: Mostly memorized phrases, many errors
+
+PRONUNCIATION:
+- Band 9: Precise, subtle, effortlessly understood
+- Band 7: Generally clear with occasional mispronunciation
+- Band 5: Strain for listener, some sounds unclear
+- Band 4: Mispronunciations frequent, hard to understand
+(Note: Text-based mode estimates pronunciation from speech patterns only - auto -0.5)
 
 JSON OUTPUT:
 \`\`\`json
 {
   "overall_band": 6.5,
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
-    "lexical_resource": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
-    "grammatical_range": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
+    "fluency_coherence": { "band": 6.5, "feedback": "1-2 sentences with specific examples from transcript", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes from transcript"], "suggestions": ["max 2"] },
+    "lexical_resource": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes"], "suggestions": ["max 2"] },
+    "grammatical_range": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes"], "suggestions": ["max 2"] },
     "pronunciation": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] }
   },
-  "summary": "2 sentence assessment",
-  "examiner_notes": "1 sentence key area",
+  "summary": "2 sentence honest assessment reflecting actual performance",
+  "examiner_notes": "1 sentence on most critical area needing improvement",
   "vocabulary_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}],
   "recognition_corrections": [{"captured": "misheard", "intended": "correct", "context": "sentence"}],
   "part_analysis": [{"part_number": 1, "performance_notes": "1 sentence", "key_moments": ["max 2"], "areas_for_improvement": ["Issue + example quote from transcript", "Issue + example", "Issue + example"]}],
@@ -937,25 +1009,25 @@ JSON OUTPUT:
       "partNumber": 1,
       "questionNumber": 1,
       "question": "Question text",
-      "candidateResponse": "Corrected transcript",
+      "candidateResponse": "Corrected transcript (or empty if unavailable)",
       "estimatedBand": 5.5,
       "targetBand": 6.5,
-      "modelAnswer": "Part1=40w, Part2=130w, Part3=50w",
-      "whyItWorks": ["max 2 points"],
-      "keyImprovements": ["max 2 points"]
+      "modelAnswer": "FULL model answer: Part1=40w, Part2=140w, Part3=55w - ALWAYS PROVIDE EVEN IF TRANSCRIPT UNAVAILABLE",
+      "whyItWorks": ["max 2 points explaining why model answer is effective"],
+      "keyImprovements": ["max 2 specific improvements candidate should make"]
     }
   ]
 }
 \`\`\`
 
-RULES:
+FINAL RULES:
 1. Return EXACTLY ${numSegments} modelAnswers with segment_keys: ${orderedSegments.map(s => s.key).join(', ')}
-2. Model answers: Part1=40w, Part2=130w, Part3=50w
-3. Max 2 items per array (except areas_for_improvement)
-4. Include max 3 vocabulary_upgrades (omit if none needed)
-5. Include max 3 recognition_corrections for speech errors (omit if none)
-6. DO NOT return transcripts_by_part
-7. part_analysis: Include 3+ areas_for_improvement per part, each with SPECIFIC example from candidate's transcript (e.g., "Insufficient length (82 words vs 150 target)", "Frequent hesitations: 'um...uh...'", "Incomplete sentence: 'I was going to...'")
+2. Model answer lengths: Part1=35-45w, Part2=130-150w (COUNT!), Part3=50-60w
+3. ALWAYS provide model answers even if transcript is "(Transcript unavailable)" or empty
+4. Max 2 items per strengths/weaknesses/suggestions arrays
+5. Include max 3 vocabulary_upgrades (omit if none needed)
+6. DO NOT inflate scores - a 3-word response CANNOT score above 3.0
+7. part_analysis: Include 3+ areas_for_improvement per part with SPECIFIC examples
 
 Return ONLY valid JSON.`;
 }
