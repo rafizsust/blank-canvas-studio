@@ -322,8 +322,12 @@ function buildQuestionIdToNumberMap(payload: any): Record<string, number> {
   for (const p of parts) {
     const questions = Array.isArray(p?.questions) ? p.questions : [];
     for (const q of questions) {
-      const id = typeof q?.id === 'string' ? q.id : null;
+      const idRaw = typeof q?.id === 'string' ? q.id : null;
       const n = typeof q?.question_number === 'number' ? q.question_number : Number(q?.question_number);
+      // IMPORTANT: Some pipelines prefix question ids with "q" (e.g. "q<uuid>") while
+      // audio segment keys are typically "...-q<uuid>" and our regex captures only the uuid.
+      // Normalize both by stripping a leading "q" so mapping works reliably.
+      const id = idRaw ? idRaw.replace(/^q/i, '') : null;
       if (id && Number.isFinite(n)) map[id] = n;
     }
   }
