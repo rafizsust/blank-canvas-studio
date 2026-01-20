@@ -1970,52 +1970,28 @@ export type Database = {
           key_value: string
         }[]
       }
-      checkout_groq_key_for_llm:
-        | {
-            Args: {
-              p_job_id: string
-              p_lock_duration_seconds?: number
-              p_part_number?: number
-            }
-            Returns: {
-              out_key_id: string
-              out_key_value: string
-            }[]
-          }
-        | {
-            Args: {
-              p_job_id: string
-              p_lock_duration_seconds?: number
-              p_part_number: number
-            }
-            Returns: {
-              out_key_id: string
-              out_key_value: string
-            }[]
-          }
-      checkout_groq_key_for_stt:
-        | {
-            Args: {
-              p_job_id: string
-              p_lock_duration_seconds?: number
-              p_part_number?: number
-            }
-            Returns: {
-              out_key_id: string
-              out_key_value: string
-            }[]
-          }
-        | {
-            Args: {
-              p_job_id: string
-              p_lock_duration_seconds?: number
-              p_part_number: number
-            }
-            Returns: {
-              out_key_id: string
-              out_key_value: string
-            }[]
-          }
+      checkout_groq_key_for_llm: {
+        Args: {
+          p_job_id: string
+          p_lock_duration_seconds?: number
+          p_part_number?: number
+        }
+        Returns: {
+          out_key_id: string
+          out_key_value: string
+        }[]
+      }
+      checkout_groq_key_for_stt: {
+        Args: {
+          p_job_id: string
+          p_lock_duration_seconds?: number
+          p_part_number?: number
+        }
+        Returns: {
+          out_key_id: string
+          out_key_value: string
+        }[]
+      }
       checkout_key_for_part: {
         Args: {
           p_job_id: string
