@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getFromR2 } from "../_shared/r2Client.ts";
 
 /**
  * Groq Speaking Transcribe
@@ -286,20 +287,25 @@ serve(async (req) => {
 
 async function downloadFromR2(
   filePath: string,
-  supabaseService: any
+  _supabaseService: any
 ): Promise<Blob | null> {
   try {
-    // Download from Supabase storage (which may be backed by R2)
-    const { data, error } = await supabaseService.storage
-      .from('speaking-audio')
-      .download(filePath);
-
-    if (error) {
-      console.error(`[groq-speaking-transcribe] R2 download error:`, error);
+    // Download directly from R2 using our shared client
+    // The filePath is already the full R2 key (e.g., "speaking-audios/ai-speaking/...")
+    console.log(`[groq-speaking-transcribe] Downloading from R2: ${filePath}`);
+    
+    const result = await getFromR2(filePath);
+    
+    if (!result.success || !result.bytes) {
+      console.error(`[groq-speaking-transcribe] R2 download error:`, result.error);
       return null;
     }
 
-    return data;
+    // Convert Uint8Array to Blob - slice to create a new ArrayBuffer for compatibility
+    const arrayBuffer = result.bytes.slice().buffer as ArrayBuffer;
+    const blob = new Blob([arrayBuffer], { type: result.contentType || 'audio/mpeg' });
+    console.log(`[groq-speaking-transcribe] Downloaded ${result.bytes.length} bytes`);
+    return blob;
   } catch (err: any) {
     console.error(`[groq-speaking-transcribe] Download exception:`, err.message);
     return null;
