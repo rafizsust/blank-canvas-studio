@@ -105,11 +105,11 @@ serve(async (req) => {
       })
       .eq('id', jobId);
 
-    // Get Groq API key for LLM
+    // Get Groq API key for LLM - cast types explicitly to resolve PostgreSQL function overload
     const { data: keyData, error: keyError } = await supabaseService.rpc('checkout_groq_key_for_llm', {
-      p_job_id: jobId,
-      p_part_number: 1,
-      p_lock_duration_seconds: 300,
+      p_job_id: jobId as string,
+      p_part_number: 1 as number,
+      p_lock_duration_seconds: 300 as number,
     });
 
     if (keyError || !keyData || keyData.length === 0) {

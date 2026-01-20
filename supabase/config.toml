@@ -1,1 +1,7 @@
 project_id = "jtfbocwsfxwrzfzvzgja"
+
+[functions.groq-speaking-transcribe]
+verify_jwt = false
+
+[functions.groq-speaking-evaluate]
+verify_jwt = false
