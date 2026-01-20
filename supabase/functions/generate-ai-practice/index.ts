@@ -579,6 +579,8 @@ async function callGemini(
               } else {
                 // Rate limit (429/TPM/RPM) - apply 45s cooldown
                 console.log(`Key ${currentKeyIndex + 1} rate limited on ${model}, applying 45s cooldown...`);
+                // Note: mark_key_rate_limited uses minutes, so 1 minute is the minimum
+                // The actual cooldown logic handles 45s waits for single-key scenarios
                 await serviceClient.rpc('mark_key_rate_limited', {
                   p_key_id: currentKeyRecord.id,
                   p_cooldown_minutes: 1, // ~45-60 seconds
@@ -597,10 +599,11 @@ async function callGemini(
               continue;
             }
             
-            // Only one key available OR all keys exhausted - wait 45s and retry with same key
-            if (!isDailyQuota && dbKeys.length === 1 && retryCount < maxRetries) {
-              console.log(`Only one key available and rate limited, waiting 45s before retry...`);
-              await sleep(45000); // Wait 45 seconds
+            // SINGLE KEY SCENARIO or all keys exhausted:
+            // If only one key available and rate limited (not daily exhausted), wait 45s and retry
+            if (!isDailyQuota && (dbKeys.length <= 1) && retryCount < maxRetries) {
+              console.log(`Single key scenario: rate limited, waiting 45s before retry...`);
+              await sleep(45000); // Wait 45 seconds for rate limit to reset
               retryCount++;
               continue;
             }

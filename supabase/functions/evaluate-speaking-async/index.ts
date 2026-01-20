@@ -219,6 +219,18 @@ serve(async (req) => {
       
       console.log(`[evaluate-speaking-async] Creating job with stage: ${stage}`);
       
+      // CRITICAL: ALWAYS store browser transcripts (if provided) as fallback for accuracy mode failures
+      // This enables text-based fallback when audio evaluation fails after retries
+      const partialResultsPayload: Record<string, any> = { evaluationMode };
+      
+      // Store transcripts in ALL modes for fallback capability
+      if (hasTranscripts) {
+        partialResultsPayload.browserTranscripts = transcripts; // Always save as fallback
+        if (!useAudioEvaluation) {
+          partialResultsPayload.transcripts = transcripts; // For text-based evaluation
+        }
+      }
+      
       const { data: newJob, error: jobError } = await supabaseService
         .from('speaking_evaluation_jobs')
         .insert({
@@ -233,9 +245,7 @@ serve(async (req) => {
           fluency_flag: fluencyFlag || false,
           max_retries: 5,
           retry_count: 0,
-          // Store transcripts for text-based evaluation (only for basic mode)
-          // For accuracy mode, transcripts are intentionally not stored to force audio evaluation
-          partial_results: (!useAudioEvaluation && hasTranscripts) ? { transcripts, evaluationMode } : { evaluationMode },
+          partial_results: partialResultsPayload,
         })
         .select()
         .single();

@@ -742,24 +742,15 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
 
   // TEXT-BASED EVALUATION PRONUNCIATION NOTE
   // Since we can't actually hear the pronunciation in text-based mode,
-  // add a disclaimer without applying an explicit penalty.
-  // The AI evaluates pronunciation based on speech recognition patterns only.
+  // add a disclaimer. NO penalty applied - identical scoring to audio mode.
   if (evaluationResult.criteria?.pronunciation?.band !== undefined) {
     evaluationResult.criteria.pronunciation.disclaimer = 
-      `Text-based evaluation: Pronunciation estimated from speech recognition patterns only. ` +
-      `For more accurate pronunciation scoring, use Accuracy Mode which analyzes your actual audio.`;
+      `Text-based evaluation: Pronunciation estimated from speech recognition patterns. ` +
+      `For more precise pronunciation analysis, use Accuracy Mode.`;
   }
 
-  // Calculate overall band (no penalty applied)
-  const overallBand = evaluationResult.overall_band 
-    ? Math.round((
-        (evaluationResult.criteria?.fluency_coherence?.band || 5.5) +
-        (evaluationResult.criteria?.lexical_resource?.band || 5.5) +
-        (evaluationResult.criteria?.grammatical_range?.band || 5.5) +
-        (evaluationResult.criteria?.pronunciation?.band || 5.5)
-      ) / 4 * 2) / 2
-    : calculateBand(evaluationResult);
-  
+  // Calculate overall band - IDENTICAL to audio mode (no -0.5 penalty)
+  const overallBand = calculateBand(evaluationResult);
   evaluationResult.overall_band = overallBand;
 
   // =========================================================================
@@ -868,12 +859,6 @@ function buildTextPrompt(
       const questionId = match ? match[2] : '';
       const qInfo = questionById.get(questionId);
       
-      const wpm = d?.fluencyMetrics?.wordsPerMinute || 0;
-      const fillers = d?.fluencyMetrics?.fillerCount || 0;
-      const pauses = d?.fluencyMetrics?.pauseCount || 0;
-      const clarity = d?.overallClarityScore || 0;
-      const pitch = d?.prosodyMetrics?.pitchVariation || 0;
-      const duration = d?.durationMs ? Math.round(d.durationMs / 1000) : 0;
       const transcript = d?.rawTranscript || d?.cleanedTranscript || '';
       
       return {
@@ -882,12 +867,6 @@ function buildTextPrompt(
         questionNumber: qInfo?.questionNumber || 0,
         questionText: qInfo?.questionText || 'Unknown',
         transcript,
-        wpm,
-        fillers,
-        pauses,
-        clarity,
-        pitch,
-        duration,
       };
     })
     .sort((a, b) => {
@@ -895,110 +874,95 @@ function buildTextPrompt(
       return a.questionNumber - b.questionNumber;
     });
 
-  // Compact segment format to reduce token usage (removed wpm suffix - not used in evaluation)
-  const segmentSummaries = orderedSegments.map((seg, idx) => 
+  // Compact segment format
+  const segmentSummaries = orderedSegments.map((seg) => 
     `[${seg.key}] P${seg.partNum} Q${seg.questionNumber}: "${seg.questionText}"\n> "${seg.transcript}"`
   ).join('\n\n');
 
   const numSegments = orderedSegments.length;
 
-  return `You are a SENIOR CERTIFIED IELTS Speaking Examiner with 15+ years of experience. Evaluate STRICTLY per official IELTS band descriptors. Be HARSH but FAIR - like a real IELTS examiner.
+  // UNIFIED PROMPT: Copy scoring rules from audio-based evaluation (speaking-evaluate-job)
+  // This ensures text-based and audio-based evaluations have identical strictness
+  return `You are a CERTIFIED SENIOR IELTS Speaking Examiner evaluating candidate responses.
+Return ONLY valid JSON.
 
-CONTEXT: Topic: ${topic} | Difficulty: ${difficulty} | Responses: ${numSegments}
-${fluencyFlag ? '⚠️ Part 2 under 80s - apply fluency penalty.' : ''}
+CONTEXT: Topic: ${topic || 'General'}, Difficulty: ${difficulty || 'Medium'}
+${fluencyFlag ? '⚠️ Speaking time under 80 seconds - apply fluency penalty.' : ''}
 
 CANDIDATE RESPONSES (Speech Recognition Transcripts):
 ${segmentSummaries}
 
-═══════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════
 🚨 CRITICAL: STRICT SCORING FOR INADEQUATE RESPONSES 🚨
-═══════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════
 
-A real IELTS examiner would NEVER give high scores for minimal responses.
-Apply these MANDATORY penalties:
+You MUST apply HARSH penalties for responses that are:
+- OFF-TOPIC or IRRELEVANT to the question
+- Extremely SHORT (under 10 meaningful words)
+- REPETITIVE NONSENSE (e.g., "nice nice nice nice")
+- Single word answers (e.g., "drama", "yes", "no")
+- Just reading the question back
 
-RESPONSE LENGTH PENALTIES (STRICTLY ENFORCED):
-- NO RESPONSE / Silence / Just says "pass" / "skip": Band 1.0-2.0
-- 1-5 words (e.g., "I don't know", "Maybe yes"): Band 2.0-2.5 MAXIMUM
-- 6-15 words (one short sentence): Band 3.0-3.5 MAXIMUM
-- 16-30 words (2-3 basic sentences): Band 4.0-4.5 MAXIMUM
-- 31-50 words (underdeveloped): Band 4.5-5.0 MAXIMUM
+⚠️ SCORING REQUIREMENTS FOR INADEQUATE RESPONSES:
+- If transcript contains < 10 meaningful words → Band 2.0-3.0 MAX
+- If transcript is off-topic/irrelevant → Band 2.5-3.5 MAX
+- If transcript is just repetition of same word → Band 1.5-2.5 MAX
+- If transcript is single word or "[NO SPEECH]" → Band 1.0-2.0 MAX
 
-For Part 2 SPECIFICALLY (Long Turn - should be 1.5-2 minutes):
-- Under 60 words: Band 3.0-4.0 MAXIMUM (severely insufficient)
-- 60-100 words: Band 4.5-5.0 MAXIMUM (insufficient length)
-- 100-150 words: Band 5.0-6.0 (minimum acceptable)
-- 150-200 words: Band 6.0-7.0 (adequate development)
-- 200+ words: Can score 7.0+ if quality is good
+DO NOT give Band 5+ for responses like:
+❌ "nice nice nice nice that's true" → This is Band 2.0
+❌ "drama" → This is Band 1.5
+❌ "yes I think so" (no elaboration) → This is Band 3.0
+❌ "would be very crucial" → This is Band 2.5
 
-REAL EXAMINER MINDSET:
-- Would YOU give someone 6.5 for saying "I think yes" or "would be very crucial"?
-- A 6.5 means "good command of English" - 3-5 word responses show NO command
-- Short responses = LIMITED vocabulary, LIMITED grammar, POOR fluency
-- If transcript shows hesitation/minimal content, score MUST reflect this
+══════════════════════════════════════════════════════════════
+SCORING GUIDELINES (APPLY STRICTLY!)
+══════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════════════════
-MODEL ANSWER REQUIREMENTS (STRICTLY ENFORCED!)
-═══════════════════════════════════════════════════════════════
+🔴 Band 1-2: Single words, nonsense, repetition, no actual answer, <5 meaningful words
+🟠 Band 2.5-3.5: 5-10 words, minimal/no relevance to question, cannot communicate ideas
+🟡 Band 4-4.5: 10-20 words, limited vocabulary, basic attempt at answering
+🟢 Band 5-6: Adequate response length (20+ words) with some development and relevance
+🔵 Band 7+: Full, fluent, well-developed responses with clear relevance
 
-You MUST provide model answers for ALL ${numSegments} questions, even if the 
-candidate's transcript shows "(Transcript unavailable)" or is empty.
+══════════════════════════════════════════════════════════════
+🚨 MANDATORY: EXAMPLES FOR ALL WEAKNESSES 🚨
+══════════════════════════════════════════════════════════════
 
-MODEL ANSWER WORD COUNTS (MUST FOLLOW EXACTLY):
-- Part 1: 35-45 words (natural, conversational with 1-2 supporting details)
-- Part 2: 130-150 words (MANDATORY - covers all cue card points with examples)
-- Part 3: 50-60 words (analytical response with reasoning and example)
+For EVERY weakness listed, you MUST include a SPECIFIC EXAMPLE from the candidate's actual response.
 
-For Part 2, your model answer MUST:
-1. Be 130-150 words (COUNT THEM!)
-2. Address ALL bullet points from the cue card
-3. Include personal examples and details
-4. Use a variety of vocabulary and sentence structures
-5. Be a complete, well-organized monologue
+FORMAT: "Issue description (e.g., 'word or phrase from their answer')"
 
-═══════════════════════════════════════════════════════════════
-BAND DESCRIPTORS (OFFICIAL IELTS)
-═══════════════════════════════════════════════════════════════
+❌ BAD: "Some inaccuracies in word choice"
+✅ GOOD: "Incorrect word form usage (e.g., 'travel solo-ly' instead of 'travel solo')"
 
-FLUENCY & COHERENCE:
-- Band 9: Fluent with rare hesitation, coherent argument
-- Band 7: Speaks at length without noticeable effort
-- Band 5: Maintains flow with noticeable pauses, repetition
-- Band 4: Cannot respond without frequent pauses, limited linking
-- Band 3: Long pauses, limited ability to link simple sentences
+══════════════════════════════════════════════════════════════
+🚨 STRICT MODEL ANSWER WORD LIMITS 🚨
+══════════════════════════════════════════════════════════════
 
-LEXICAL RESOURCE:
-- Band 9: Wide range, precise meaning, natural idioms
-- Band 7: Flexible vocabulary, paraphrasing
-- Band 5: Limited vocabulary for less common topics
-- Band 4: Basic vocabulary, repetition
-- Band 3: Very limited vocabulary, only simple words
+Part 1: 35-45 words (target: 40 words)
+Part 2: 130-150 words (target: 140 words) - MANDATORY!
+Part 3: 50-60 words (target: 55 words)
 
-GRAMMATICAL RANGE & ACCURACY:
-- Band 9: Full range, consistently accurate
-- Band 7: Complex structures, frequent accuracy
-- Band 5: Basic sentence forms only, errors common
-- Band 4: Basic sentences, subordinate clauses rare
-- Band 3: Mostly memorized phrases, many errors
+⚠️ Model answers outside this range are INVALID.
+Count words carefully before outputting.
 
-PRONUNCIATION:
-- Band 9: Precise, subtle, effortlessly understood
-- Band 7: Generally clear with occasional mispronunciation
-- Band 5: Strain for listener, some sounds unclear
-- Band 4: Mispronunciations frequent, hard to understand
-(Note: Text-based mode estimates pronunciation from speech patterns only - auto -0.5)
+CRITICAL: You MUST provide model answers for ALL ${numSegments} questions,
+EVEN IF the transcript shows "(Transcript unavailable)" or is empty.
+Generate the model answer based on the QUESTION TEXT alone.
 
-JSON OUTPUT:
-\`\`\`json
+══════════════════════════════════════════════════════════════
+OUTPUT JSON SCHEMA
+══════════════════════════════════════════════════════════════
 {
-  "overall_band": 6.5,
+  "overall_band": 6.0,
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "1-2 sentences with specific examples from transcript", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes from transcript"], "suggestions": ["max 2"] },
-    "lexical_resource": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes"], "suggestions": ["max 2"] },
-    "grammatical_range": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quotes"], "suggestions": ["max 2"] },
-    "pronunciation": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] }
+    "fluency_coherence": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "lexical_resource": {"band": 6.0, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": ["str1", "str2"], "weaknesses": ["Issue (e.g., 'example from transcript')"], "suggestions": ["tip1"]},
+    "pronunciation": {"band": 6.0, "feedback": "Text-based: estimated from speech patterns", "strengths": ["str1"], "weaknesses": ["Issue"], "suggestions": ["tip1"]}
   },
-  "summary": "2 sentence honest assessment reflecting actual performance",
+  "summary": "2-3 sentences honest assessment reflecting actual performance",
   "examiner_notes": "1 sentence on most critical area needing improvement",
   "vocabulary_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}],
   "recognition_corrections": [{"captured": "misheard", "intended": "correct", "context": "sentence"}],

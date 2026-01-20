@@ -555,26 +555,35 @@ serve(async (req) => {
         let fallbackTranscripts: Record<string, any> | null = null;
 
         if (evaluationMode === 'accuracy' && newPartRetries >= ACCURACY_FALLBACK_THRESHOLD) {
-          // Check if we have saved browser transcripts to fall back to
-          const { data: lastResult } = await supabaseService
-            .from('ai_practice_results')
-            .select('answers')
-            .eq('test_id', currentJobState?.test_id || job.test_id)
-            .eq('user_id', currentJobState?.user_id || userId)
-            .eq('module', 'speaking')
-            .order('completed_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          const answers = lastResult?.answers as any;
-          const savedTranscripts = answers?.transcripts;
+          // PRIORITY 1: Check browserTranscripts saved in the job's partial_results
+          const browserTranscripts = partialResultsForRetry.browserTranscripts;
           
-          if (savedTranscripts && typeof savedTranscripts === 'object' && Object.keys(savedTranscripts).length > 0) {
-            console.log(`[speaking-evaluate-job] AUTO-FALLBACK: Switching from accuracy to basic mode after ${newPartRetries} failures`);
+          if (browserTranscripts && typeof browserTranscripts === 'object' && Object.keys(browserTranscripts).length > 0) {
+            console.log(`[speaking-evaluate-job] AUTO-FALLBACK: Using browserTranscripts from job (${Object.keys(browserTranscripts).length} segments)`);
             shouldFallbackToText = true;
-            fallbackTranscripts = savedTranscripts;
+            fallbackTranscripts = browserTranscripts;
           } else {
-            console.log(`[speaking-evaluate-job] Cannot auto-fallback to basic mode - no saved transcripts available`);
+            // PRIORITY 2: Check ai_practice_results for previously saved transcripts
+            const { data: lastResult } = await supabaseService
+              .from('ai_practice_results')
+              .select('answers')
+              .eq('test_id', currentJobState?.test_id || job.test_id)
+              .eq('user_id', currentJobState?.user_id || userId)
+              .eq('module', 'speaking')
+              .order('completed_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            const answers = lastResult?.answers as any;
+            const savedTranscripts = answers?.transcripts;
+            
+            if (savedTranscripts && typeof savedTranscripts === 'object' && Object.keys(savedTranscripts).length > 0) {
+              console.log(`[speaking-evaluate-job] AUTO-FALLBACK: Using transcripts from previous result`);
+              shouldFallbackToText = true;
+              fallbackTranscripts = savedTranscripts;
+            } else {
+              console.log(`[speaking-evaluate-job] Cannot auto-fallback - no browser transcripts or saved results available`);
+            }
           }
         }
         
