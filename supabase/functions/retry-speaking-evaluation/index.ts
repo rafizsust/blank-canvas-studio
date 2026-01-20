@@ -127,13 +127,63 @@ serve(async (req) => {
           continue;
         }
 
-        // Determine which stage the job should retry from
-        const hasTranscripts = Boolean(job.partial_results?.transcripts) && Object.keys(job.partial_results.transcripts || {}).length > 0;
+        // =====================================================================
+        // CRITICAL: Preserve the ORIGINAL evaluation mode from partial_results
+        // =====================================================================
+        const partialResults = job.partial_results || {};
+        const originalEvaluationMode = partialResults.evaluationMode || 'accuracy';
+        const hasTranscripts = Boolean(partialResults?.transcripts) && Object.keys(partialResults.transcripts || {}).length > 0;
         const hasGoogleUris = job.google_file_uris && Object.keys(job.google_file_uris).length > 0;
 
-        // Text-based evaluation should always retry via process-speaking-job
-        const targetStage = hasTranscripts ? 'pending_text_eval' : (hasGoogleUris ? 'pending_eval' : 'pending_upload');
-        const targetFunction = hasTranscripts ? 'process-speaking-job' : (hasGoogleUris ? 'speaking-evaluate-job' : 'speaking-upload-job');
+        // Check for auto-fallback from accuracy to basic mode after repeated failures
+        const accuracyRetryCount = (partialResults.accuracyModeRetries as number) || 0;
+        const MAX_ACCURACY_RETRIES = 2;
+        let effectiveMode = originalEvaluationMode;
+        let updatedPartialResults = { ...partialResults };
+
+        // If accuracy mode has failed 2+ times AND we have saved transcripts, auto-switch to basic
+        if (originalEvaluationMode === 'accuracy' && accuracyRetryCount >= MAX_ACCURACY_RETRIES) {
+          // Check if we have saved browser transcripts from a previous result
+          const { data: lastResult } = await supabaseService
+            .from('ai_practice_results')
+            .select('answers')
+            .eq('test_id', job.test_id)
+            .eq('user_id', job.user_id)
+            .eq('module', 'speaking')
+            .order('completed_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          const answers = lastResult?.answers as any;
+          const savedTranscripts = answers?.transcripts;
+          
+          if (savedTranscripts && typeof savedTranscripts === 'object' && Object.keys(savedTranscripts).length > 0) {
+            console.log(`[retry-speaking-evaluation] Auto-switching from accuracy to basic mode after ${accuracyRetryCount} failures`);
+            effectiveMode = 'basic';
+            updatedPartialResults = {
+              ...partialResults,
+              evaluationMode: 'basic',
+              transcripts: savedTranscripts,
+              autoFallbackFromAccuracy: true,
+            };
+          } else {
+            console.log(`[retry-speaking-evaluation] Cannot auto-switch to basic mode - no saved transcripts available`);
+          }
+        }
+
+        // Track accuracy mode retries
+        if (effectiveMode === 'accuracy') {
+          updatedPartialResults.accuracyModeRetries = accuracyRetryCount + 1;
+        }
+
+        // Determine target stage based on EFFECTIVE mode (not just transcript presence)
+        // - basic mode with transcripts: text-based evaluation
+        // - accuracy mode OR no transcripts: audio-based evaluation
+        const useTextEval = effectiveMode === 'basic' && (hasTranscripts || updatedPartialResults.transcripts);
+        const targetStage = useTextEval ? 'pending_text_eval' : (hasGoogleUris ? 'pending_eval' : 'pending_upload');
+        const targetFunction = useTextEval ? 'process-speaking-job' : (hasGoogleUris ? 'speaking-evaluate-job' : 'speaking-upload-job');
+
+        console.log(`[retry-speaking-evaluation] Job ${job.id}: originalMode=${originalEvaluationMode}, effectiveMode=${effectiveMode}, targetStage=${targetStage}`);
 
         // Reset the job to pending state for the appropriate stage
         const { error: updateError } = await supabaseService
@@ -144,6 +194,7 @@ serve(async (req) => {
             retry_count: currentRetryCount + 1,
             lock_token: null,
             lock_expires_at: null,
+            partial_results: updatedPartialResults,
             last_error: isManualRetry 
               ? `Manual retry #${currentRetryCount + 1}: ${job.last_error || 'Unknown error'}`
               : `Auto-retry ${currentRetryCount + 1}/${AUTO_MAX_RETRIES}: ${job.last_error || 'Unknown error'}`,
@@ -187,7 +238,7 @@ serve(async (req) => {
         }
 
         console.log(`[retry-speaking-evaluation] Successfully triggered ${targetFunction} for job ${job.id}`);
-        results.push({ jobId: job.id, status: 'retrying', message: `Retry triggered via ${targetFunction}` });
+        results.push({ jobId: job.id, status: 'retrying', message: `Retry triggered via ${targetFunction} (mode: ${effectiveMode})` });
 
       } catch (err: any) {
         console.error(`[retry-speaking-evaluation] Error processing job ${job.id}:`, err);

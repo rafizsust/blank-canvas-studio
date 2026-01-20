@@ -378,7 +378,7 @@ async function processJob(job: any, supabaseService: any, appEncryptionKey: stri
           model: modelName,
           generationConfig: {
             temperature: 0.3,
-            maxOutputTokens: 65000,
+            maxOutputTokens: 80000, // Increased to prevent truncation of model answers
             responseMimeType: 'application/json', // Force JSON output for reliable parsing
           },
         });
@@ -626,7 +626,7 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
           model: modelName,
           generationConfig: { 
             temperature: 0.3, 
-            maxOutputTokens: 30000, // Increased to prevent JSON truncation
+            maxOutputTokens: 60000, // Increased significantly to prevent JSON truncation and missing model answers
             responseMimeType: 'application/json', // Force JSON output
           },
         });
