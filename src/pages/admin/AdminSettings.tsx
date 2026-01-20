@@ -78,12 +78,13 @@ interface ApiKey {
   exp_pro_quota_exhausted: boolean | null;
   exp_pro_quota_exhausted_date: string | null;
   // Groq-specific
-  whisper_v3_turbo_exhausted?: boolean | null;
-  whisper_v3_turbo_exhausted_date?: string | null;
-  llama_70b_exhausted?: boolean | null;
-  llama_70b_exhausted_date?: string | null;
+  groq_whisper_exhausted?: boolean | null;
+  groq_whisper_exhausted_date?: string | null;
+  groq_llama_exhausted?: boolean | null;
+  groq_llama_exhausted_date?: string | null;
   groq_ash_used_this_hour?: number | null;
   groq_ash_reset_at?: string | null;
+  groq_rpm_cooldown_until?: string | null;
 }
 
 interface ProviderSettings {
@@ -720,7 +721,7 @@ export default function AdminSettings() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          {key.whisper_v3_turbo_exhausted && isQuotaExhaustedToday(key.whisper_v3_turbo_exhausted_date || null) ? (
+                          {key.groq_whisper_exhausted && isQuotaExhaustedToday(key.groq_whisper_exhausted_date || null) ? (
                             <Badge variant="outline" className="text-amber-600 border-amber-600">
                               Exhausted
                             </Badge>
@@ -732,7 +733,7 @@ export default function AdminSettings() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {key.llama_70b_exhausted && isQuotaExhaustedToday(key.llama_70b_exhausted_date || null) ? (
+                          {key.groq_llama_exhausted && isQuotaExhaustedToday(key.groq_llama_exhausted_date || null) ? (
                             <Badge variant="outline" className="text-amber-600 border-amber-600">
                               Exhausted
                             </Badge>

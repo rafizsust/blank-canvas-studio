@@ -249,6 +249,13 @@ export type Database = {
           gemini_3_pro_exhausted_date: string | null
           gemini_exp_1206_exhausted: boolean | null
           gemini_exp_1206_exhausted_date: string | null
+          groq_ash_reset_at: string | null
+          groq_ash_used_this_hour: number | null
+          groq_llama_exhausted: boolean | null
+          groq_llama_exhausted_date: string | null
+          groq_rpm_cooldown_until: string | null
+          groq_whisper_exhausted: boolean | null
+          groq_whisper_exhausted_date: string | null
           id: string
           is_active: boolean
           key_value: string
@@ -287,6 +294,13 @@ export type Database = {
           gemini_3_pro_exhausted_date?: string | null
           gemini_exp_1206_exhausted?: boolean | null
           gemini_exp_1206_exhausted_date?: string | null
+          groq_ash_reset_at?: string | null
+          groq_ash_used_this_hour?: number | null
+          groq_llama_exhausted?: boolean | null
+          groq_llama_exhausted_date?: string | null
+          groq_rpm_cooldown_until?: string | null
+          groq_whisper_exhausted?: boolean | null
+          groq_whisper_exhausted_date?: string | null
           id?: string
           is_active?: boolean
           key_value: string
@@ -325,6 +339,13 @@ export type Database = {
           gemini_3_pro_exhausted_date?: string | null
           gemini_exp_1206_exhausted?: boolean | null
           gemini_exp_1206_exhausted_date?: string | null
+          groq_ash_reset_at?: string | null
+          groq_ash_used_this_hour?: number | null
+          groq_llama_exhausted?: boolean | null
+          groq_llama_exhausted_date?: string | null
+          groq_rpm_cooldown_until?: string | null
+          groq_whisper_exhausted?: boolean | null
+          groq_whisper_exhausted_date?: string | null
           id?: string
           is_active?: boolean
           key_value?: string
@@ -1147,6 +1168,9 @@ export type Database = {
           file_paths: Json
           fluency_flag: boolean | null
           google_file_uris: Json | null
+          groq_llm_key_id: string | null
+          groq_retry_count: number | null
+          groq_stt_key_id: string | null
           heartbeat_at: string | null
           id: string
           last_error: string | null
@@ -1157,6 +1181,7 @@ export type Database = {
           preset_id: string | null
           processing_started_at: string | null
           progress: number | null
+          provider: string | null
           result_id: string | null
           retry_count: number | null
           stage: string | null
@@ -1164,6 +1189,7 @@ export type Database = {
           test_id: string
           topic: string | null
           total_parts: number | null
+          transcription_result: Json | null
           updated_at: string
           upload_api_key_id: string | null
           upload_completed_at: string | null
@@ -1178,6 +1204,9 @@ export type Database = {
           file_paths?: Json
           fluency_flag?: boolean | null
           google_file_uris?: Json | null
+          groq_llm_key_id?: string | null
+          groq_retry_count?: number | null
+          groq_stt_key_id?: string | null
           heartbeat_at?: string | null
           id?: string
           last_error?: string | null
@@ -1188,6 +1217,7 @@ export type Database = {
           preset_id?: string | null
           processing_started_at?: string | null
           progress?: number | null
+          provider?: string | null
           result_id?: string | null
           retry_count?: number | null
           stage?: string | null
@@ -1195,6 +1225,7 @@ export type Database = {
           test_id: string
           topic?: string | null
           total_parts?: number | null
+          transcription_result?: Json | null
           updated_at?: string
           upload_api_key_id?: string | null
           upload_completed_at?: string | null
@@ -1209,6 +1240,9 @@ export type Database = {
           file_paths?: Json
           fluency_flag?: boolean | null
           google_file_uris?: Json | null
+          groq_llm_key_id?: string | null
+          groq_retry_count?: number | null
+          groq_stt_key_id?: string | null
           heartbeat_at?: string | null
           id?: string
           last_error?: string | null
@@ -1219,6 +1253,7 @@ export type Database = {
           preset_id?: string | null
           processing_started_at?: string | null
           progress?: number | null
+          provider?: string | null
           result_id?: string | null
           retry_count?: number | null
           stage?: string | null
@@ -1226,12 +1261,27 @@ export type Database = {
           test_id?: string
           topic?: string | null
           total_parts?: number | null
+          transcription_result?: Json | null
           updated_at?: string
           upload_api_key_id?: string | null
           upload_completed_at?: string | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "speaking_evaluation_jobs_groq_llm_key_id_fkey"
+            columns: ["groq_llm_key_id"]
+            isOneToOne: false
+            referencedRelation: "api_keys"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaking_evaluation_jobs_groq_stt_key_id_fkey"
+            columns: ["groq_stt_key_id"]
+            isOneToOne: false
+            referencedRelation: "api_keys"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "speaking_evaluation_jobs_upload_api_key_id_fkey"
             columns: ["upload_api_key_id"]
@@ -1240,6 +1290,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      speaking_evaluation_settings: {
+        Row: {
+          auto_fallback_enabled: boolean
+          created_at: string
+          id: string
+          max_groq_retries: number
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          auto_fallback_enabled?: boolean
+          created_at?: string
+          id?: string
+          max_groq_retries?: number
+          provider?: string
+          updated_at?: string
+        }
+        Update: {
+          auto_fallback_enabled?: boolean
+          created_at?: string
+          id?: string
+          max_groq_retries?: number
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       speaking_question_groups: {
         Row: {
@@ -1857,6 +1934,28 @@ export type Database = {
           key_value: string
         }[]
       }
+      checkout_groq_key_for_llm: {
+        Args: {
+          p_job_id: string
+          p_lock_duration_seconds?: number
+          p_part_number: number
+        }
+        Returns: {
+          out_key_id: string
+          out_key_value: string
+        }[]
+      }
+      checkout_groq_key_for_stt: {
+        Args: {
+          p_job_id: string
+          p_lock_duration_seconds?: number
+          p_part_number: number
+        }
+        Returns: {
+          out_key_id: string
+          out_key_value: string
+        }[]
+      }
       checkout_key_for_part: {
         Args: {
           p_job_id: string
@@ -1891,6 +1990,7 @@ export type Database = {
           total_calls: number
         }[]
       }
+      get_speaking_evaluation_provider: { Args: never; Returns: string }
       has_active_subscription: { Args: { p_user_id: string }; Returns: boolean }
       increment_topic_completion: {
         Args: { p_module: string; p_topic: string; p_user_id: string }
@@ -1909,8 +2009,20 @@ export type Database = {
         }
         Returns: undefined
       }
+      mark_groq_key_exhausted: {
+        Args: { p_key_id: string; p_model: string }
+        Returns: undefined
+      }
+      mark_groq_key_rpm_limited: {
+        Args: { p_cooldown_seconds?: number; p_key_id: string }
+        Returns: undefined
+      }
       mark_key_rate_limited: {
         Args: { p_cooldown_minutes?: number; p_key_id: string }
+        Returns: undefined
+      }
+      record_groq_ash_usage: {
+        Args: { p_audio_seconds: number; p_key_id: string }
         Returns: undefined
       }
       refund_credits: {

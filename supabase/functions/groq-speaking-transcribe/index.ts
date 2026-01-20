@@ -121,7 +121,8 @@ serve(async (req) => {
     // Get Groq API key
     const { data: keyData, error: keyError } = await supabaseService.rpc('checkout_groq_key_for_stt', {
       p_job_id: jobId,
-      p_estimated_audio_seconds: 600, // Estimate ~10 min total
+      p_part_number: 1,
+      p_lock_duration_seconds: 300,
     });
 
     if (keyError || !keyData || keyData.length === 0) {

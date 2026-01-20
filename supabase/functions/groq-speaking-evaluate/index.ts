@@ -107,6 +107,8 @@ serve(async (req) => {
     // Get Groq API key for LLM
     const { data: keyData, error: keyError } = await supabaseService.rpc('checkout_groq_key_for_llm', {
       p_job_id: jobId,
+      p_part_number: 1,
+      p_lock_duration_seconds: 300,
     });
 
     if (keyError || !keyData || keyData.length === 0) {
@@ -216,12 +218,13 @@ serve(async (req) => {
     };
 
     // Store result (same format as Gemini for compatibility)
+    // Store result in partial_results (same format as Gemini for compatibility)
     await supabaseService
       .from('speaking_evaluation_jobs')
       .update({
         status: 'completed',
         stage: 'completed',
-        result: evaluation,
+        partial_results: evaluation,
         completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         last_error: null,
