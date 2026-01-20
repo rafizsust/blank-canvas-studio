@@ -630,11 +630,12 @@ ${pauseInfo}
     };
   });
 
-  // STRICT word limits for model answers (matching Gemini)
+  // STRICT word limits for model answers - reduced to optimize token usage
+  // Part 2 must be at least 150 words (IELTS long turn requirement)
   const modelAnswerWordLimits: Record<number, { min: number; max: number; target: number }> = {
-    1: { min: 55, max: 75, target: 65 },
-    2: { min: 210, max: 260, target: 235 },
-    3: { min: 110, max: 150, target: 130 },
+    1: { min: 35, max: 50, target: 40 },
+    2: { min: 150, max: 180, target: 165 },
+    3: { min: 60, max: 80, target: 70 },
   };
 
   // Build part_analysis requirement
@@ -695,29 +696,36 @@ DO NOT give Band 5+ for responses like:
 ❌ "yes I think so" (no elaboration) → Band 3.0-3.5
 
 ══════════════════════════════════════════════════════════════
-🚨 MANDATORY: EXAMPLES FOR ALL WEAKNESSES 🚨
+🚨🚨🚨 ABSOLUTE REQUIREMENT: EVERY WEAKNESS MUST HAVE AN EXAMPLE 🚨🚨🚨
 ══════════════════════════════════════════════════════════════
 
-For EVERY weakness, include a SPECIFIC EXAMPLE from the candidate's actual response.
+⚠️ NEVER provide a weakness without a direct quote example from the transcript.
+⚠️ Weaknesses without examples are INVALID and must not be included.
 
-FORMAT: "Issue description (e.g., 'exact word or phrase from their answer')"
+MANDATORY FORMAT for ALL weaknesses:
+"[Issue description] (e.g., '[exact quote from their transcript]')"
 
-❌ BAD: "Some grammar errors"
-✅ GOOD: "Subject-verb agreement errors (e.g., 'the people goes' instead of 'the people go')"
+❌ INVALID (NO EXAMPLE): "Some grammar errors"
+❌ INVALID (NO EXAMPLE): "Limited vocabulary"
+❌ INVALID (NO EXAMPLE): "Could improve sentence structure"
+❌ INVALID (NO EXAMPLE): "Occasional grammatical errors, such as subject-verb agreement issues"
 
-❌ BAD: "Limited vocabulary"
-✅ GOOD: "Repetitive use of basic words (e.g., used 'good' 4 times instead of 'beneficial', 'excellent')"
+✅ VALID: "Subject-verb agreement errors (e.g., 'the people goes' instead of 'the people go')"
+✅ VALID: "Repetitive use of basic words (e.g., used 'good' 4 times - should use 'beneficial', 'excellent')"
+✅ VALID: "Run-on sentences without proper connectors (e.g., 'I like it because it is good I use it every day')"
+
+If you cannot find a specific example for a weakness, DO NOT include that weakness.
 
 ══════════════════════════════════════════════════════════════
 🚨 STRICT MODEL ANSWER WORD LIMITS 🚨
 ══════════════════════════════════════════════════════════════
 
-Part 1: EXACTLY 55-75 words per answer (target: 65)
-Part 2: EXACTLY 210-260 words (target: 235)
-Part 3: EXACTLY 110-150 words per answer (target: 130)
+Part 1: 35-50 words per answer (target: 40) - concise but complete
+Part 2: MINIMUM 150 words (target: 165) - THIS IS MANDATORY for long turn
+Part 3: 60-80 words per answer (target: 70) - balanced discussion
 
-⚠️ Model answers outside these ranges are INVALID.
-Count words carefully!
+⚠️ Part 2 model answers under 150 words are INVALID.
+⚠️ Prioritize Part 2 word count over Part 1/3 if token limits are tight.
 
 ══════════════════════════════════════════════════════════════
 TRANSCRIPTION DATA (from Whisper STT)
@@ -742,48 +750,47 @@ OUTPUT JSON SCHEMA (FOLLOW EXACTLY)
   "criteria": {
     "fluency_coherence": {
       "band": <number 1.0-9.0 in 0.5 increments>,
-      "feedback": "<2-3 sentences addressing pauses, hesitations, flow, and coherence>",
-      "strengths": ["<strength with quote example>", "<second strength>"],
-      "weaknesses": ["<weakness (e.g., 'quote from transcript')>", "<second weakness (e.g., 'quote')>"],
-      "suggestions": ["<actionable tip>", "<second tip>"]
+      "feedback": "<2 sentences addressing pauses, hesitations, flow>",
+      "strengths": ["<strength with quote>"],
+      "weaknesses": ["<MUST include quote: 'Issue (e.g., exact words from transcript)'>"],
+      "suggestions": ["<actionable tip>"]
     },
     "lexical_resource": {
       "band": <number>,
-      "feedback": "<2-3 sentences on vocabulary range, precision, idioms>",
+      "feedback": "<2 sentences on vocabulary range>",
       "strengths": ["<strength with example>"],
-      "weaknesses": ["<weakness (e.g., 'quote')>"],
+      "weaknesses": ["<MUST include quote: 'Issue (e.g., they said X instead of Y)'>"],
       "suggestions": ["<tip>"]
     },
     "grammatical_range": {
       "band": <number>,
-      "feedback": "<2-3 sentences on grammar variety and accuracy>",
+      "feedback": "<2 sentences on grammar variety>",
       "strengths": ["<strength>"],
-      "weaknesses": ["<weakness (e.g., 'quote')>"],
+      "weaknesses": ["<MUST include quote: 'Error type (e.g., their exact grammar mistake)'>"],
       "suggestions": ["<tip>"]
     },
     "pronunciation": {
       "band": ${pronunciationEstimate.estimatedBand},
-      "feedback": "<2 sentences noting this is estimated from audio clarity>",
+      "feedback": "<1 sentence - estimated from audio clarity>",
       "strengths": ["<strength>"],
-      "weaknesses": ["<weakness>"],
+      "weaknesses": ["<based on transcription confidence>"],
       "suggestions": ["<tip>"]
     }
   },
-  "summary": "<3-4 sentence overall assessment covering all criteria>",
-  "examiner_notes": "<1-2 sentences on the most critical improvement area>",
+  "summary": "<2-3 sentence overall assessment>",
+  "examiner_notes": "<1 sentence on critical improvement>",
   "modelAnswers": [
     ${modelAnswersRequirement}
   ],
   "lexical_upgrades": [
-    {"original": "<actual word from transcript>", "upgraded": "<sophisticated alternative>", "context": "<how to use in sentence>"},
-    {"original": "...", "upgraded": "...", "context": "..."},
+    {"original": "<word from transcript>", "upgraded": "<better word>", "context": "<short usage>"},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."}
   ],
   "vocabulary_upgrades": [
-    {"original": "<basic word from transcript>", "upgraded": "<advanced word>", "context": "<example sentence>"},
+    {"original": "<basic word>", "upgraded": "<advanced>", "context": "<example>"},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
@@ -805,11 +812,12 @@ Before outputting, verify:
 - [ ] modelAnswers has EXACTLY ${totalQuestions} entries (one per question)
 - [ ] Each modelAnswer has the FULL question text from the segment
 - [ ] Each modelAnswer has the CORRECT transcript for that question (NOT duplicated)
-- [ ] Model answer word counts: Part 1=35±5, Part 2=150±10, Part 3=70±10
+- [ ] Part 2 model answer is AT LEAST 150 words (MANDATORY - check carefully!)
+- [ ] Part 1 answers: 35-50 words, Part 3 answers: 60-80 words
 - [ ] part_analysis has EXACTLY ${partNumbers.length} entries for parts: ${partNumbers.join(', ')}
-- [ ] lexical_upgrades has AT LEAST 6 entries with real examples
-- [ ] vocabulary_upgrades has AT LEAST 6 entries
-- [ ] ALL weaknesses have (e.g., 'quote') examples
+- [ ] lexical_upgrades has AT LEAST 5 entries with real examples
+- [ ] vocabulary_upgrades has AT LEAST 5 entries (can share with lexical)
+- [ ] EVERY weakness includes (e.g., 'exact quote') - NO EXCEPTIONS
 - [ ] Bands are realistic: inadequate responses get Band 2-4, not 5+
 
 🚨 CRITICAL: Each modelAnswer MUST correspond to its specific question with the correct transcript. Do NOT copy the same transcript to all answers.
