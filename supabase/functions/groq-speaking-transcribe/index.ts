@@ -371,20 +371,29 @@ async function transcribeWithWhisper(
   const startTime = Date.now();
 
   // Prepare form data for Whisper API
+  // IMPORTANT: Use proper file extension based on blob type for better Groq handling
+  const fileExtension = audioBlob.type.includes('mpeg') || audioBlob.type.includes('mp3') ? 'mp3' : 'webm';
   const formData = new FormData();
-  formData.append('file', audioBlob, 'audio.webm');
+  formData.append('file', audioBlob, `audio.${fileExtension}`);
   formData.append('model', 'whisper-large-v3-turbo');
   formData.append('response_format', 'verbose_json');
   formData.append('timestamp_granularities[]', 'word');
   formData.append('timestamp_granularities[]', 'segment');
   formData.append('language', 'en');
-  // Prompt to encourage filler word transcription and prevent hallucinations
+  
+  // Enhanced prompt to ensure FULL audio transcription with all details
+  // The prompt primes Whisper for IELTS-style responses and prevents early stopping
   formData.append('prompt', 
-    'Transcribe exactly as spoken in this IELTS speaking test response. ' +
-    'Include all filler words such as um, uh, ah, er, hmm, like, you know. ' +
-    'Include false starts, repetitions, and self-corrections. ' +
-    'If there is silence or no speech, output nothing. Do not add any text for silent portions. ' +
-    'Do not add greetings like "thank you" or "goodbye" unless they were actually spoken.'
+    'This is an IELTS speaking test recording. ' +
+    'Transcribe the ENTIRE audio from start to finish completely and accurately. ' +
+    'Do NOT stop early or truncate the transcription. ' +
+    'Include ALL filler words: um, uh, ah, er, hmm, like, you know, I mean, sort of, kind of. ' +
+    'Include ALL false starts, repetitions, and self-corrections exactly as spoken. ' +
+    'Include stutters and hesitations. ' +
+    'Write "[INAUDIBLE]" for unclear portions. ' +
+    'If there is complete silence, output "[NO SPEECH]". ' +
+    'Do not invent or add any words not actually spoken. ' +
+    'Do not add "thank you", "goodbye", or other phrases unless clearly spoken.'
   );
 
   const response = await fetch(GROQ_API_URL, {

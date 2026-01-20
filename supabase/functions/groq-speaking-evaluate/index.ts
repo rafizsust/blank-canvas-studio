@@ -172,15 +172,26 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a certified IELTS Speaking Examiner with 10+ years of experience. Provide accurate, fair assessments following official IELTS band descriptors. Always respond with valid JSON matching the exact schema requested. You MUST provide complete responses for ALL questions and ALL parts.'
+            content: `You are a CERTIFIED SENIOR IELTS Speaking Examiner with 10+ years of experience.
+
+CRITICAL RULES:
+1. Provide accurate, fair assessments following official IELTS band descriptors
+2. ALWAYS respond with valid JSON matching the EXACT schema requested
+3. Provide COMPLETE responses for ALL questions - never skip or duplicate
+4. Each question gets its OWN unique model answer with the CORRECT transcript
+5. Model answers MUST meet word count requirements (Part 1: 35 words, Part 2: 150 words, Part 3: 70 words)
+6. Apply STRICT scoring: short/off-topic responses get Band 2-4, NOT Band 5+
+7. EVERY weakness must include a direct quote example from the transcript
+
+DO NOT duplicate answers. Each segment_key corresponds to ONE unique response.`
           },
           {
             role: 'user',
             content: evaluationPrompt
           }
         ],
-        temperature: 0.3,
-        max_tokens: 16000,
+        temperature: 0.2, // Lower temperature for more consistent output
+        max_tokens: 24000, // Increased for detailed model answers
         response_format: { type: 'json_object' },
       }),
     });
@@ -587,116 +598,174 @@ ${pauseInfo}
 
   // Count total questions and build segment info for modelAnswers requirement
   const totalQuestions = transcriptions.length;
-  const segmentInfo = transcriptions.map(t => ({
-    segment_key: t.segmentKey,
-    partNumber: t.partNumber,
-    questionNumber: t.questionNumber,
-    question: getQuestionTextFromPayload(testPayload, t.partNumber, t.questionNumber, t.segmentKey) || `Part ${t.partNumber} Q${t.questionNumber}`,
-    transcript: t.text,
-  }));
+  const segmentInfo = transcriptions.map(t => {
+    const questionText = getQuestionTextFromPayload(testPayload, t.partNumber, t.questionNumber, t.segmentKey);
+    return {
+      segment_key: t.segmentKey,
+      partNumber: t.partNumber,
+      questionNumber: t.questionNumber,
+      question: questionText || `Part ${t.partNumber} Question ${t.questionNumber}`,
+      transcript: t.text,
+    };
+  });
+
+  // STRICT word limits for model answers (matching Gemini)
+  const modelAnswerWordLimits: Record<number, { min: number; max: number; target: number }> = {
+    1: { min: 30, max: 40, target: 35 },  // Part 1: ~35 words per answer
+    2: { min: 140, max: 160, target: 150 }, // Part 2: ~150 words total
+    3: { min: 60, max: 80, target: 70 },  // Part 3: ~70 words per answer
+  };
 
   // Build part_analysis requirement
   const partAnalysisRequirement = partNumbers.map(p => `{
       "part_number": ${p},
-      "performance_notes": "<1-2 sentence assessment of Part ${p}>",
-      "key_moments": ["<positive moment with quote>", "<another positive>"],
-      "areas_for_improvement": ["<issue with quote>", "<another issue>", "<third issue>"]
+      "performance_notes": "<2-3 sentence assessment of Part ${p} with specific examples>",
+      "key_moments": ["<positive moment with direct quote>", "<another positive with quote>"],
+      "areas_for_improvement": ["<issue with direct quote>", "<another issue with quote>", "<third issue with quote>"]
     }`).join(',\n    ');
 
-  // Build modelAnswers requirement showing ALL questions
+  // Build modelAnswers requirement showing ALL questions with strict word counts
   const modelAnswersRequirement = segmentInfo.map((s, i) => {
-    const wordTarget = s.partNumber === 2 ? 140 : (s.partNumber === 1 ? 40 : 55);
+    const limits = modelAnswerWordLimits[s.partNumber] || { target: 50 };
+    const wordTarget = limits.target;
     return `{
       "segment_key": "${s.segment_key}",
       "partNumber": ${s.partNumber},
       "questionNumber": ${s.questionNumber},
-      "question": "${s.question}",
-      "candidateResponse": "${s.transcript.slice(0, 100)}...",
-      "estimatedBand": <band for this response>,
-      "targetBand": <estimatedBand + 1>,
-      "modelAnswer": "<FULL ${wordTarget}-word model answer>",
-      "whyItWorks": ["<reason>", "<reason>"],
-      "keyImprovements": ["<improvement>", "<improvement>"]
+      "question": "${s.question.replace(/"/g, '\\"')}",
+      "candidateResponse": "${s.transcript.slice(0, 80).replace(/"/g, '\\"')}...",
+      "estimatedBand": <band for this specific response 1.0-9.0>,
+      "targetBand": <estimatedBand + 1, max 9>,
+      "modelAnswer": "<COMPLETE ${wordTarget}-word model answer - MUST be exactly ${limits.min}-${limits.max} words>",
+      "whyItWorks": ["<specific reason why model answer is better>", "<second reason>"],
+      "keyImprovements": ["<specific improvement from their answer>", "<second improvement>"]
     }`;
   }).join(',\n    ');
 
-  return `
-# IELTS Speaking Test Evaluation
+  return `You are a CERTIFIED SENIOR IELTS Speaking Examiner with 10+ years of experience.
+Return ONLY valid JSON matching the exact schema below.
 
-## Instructions
-You are evaluating an IELTS Speaking test with ${totalQuestions} questions across ${partNumbers.length} part(s): ${partNumbers.join(', ')}.
-Provide a comprehensive evaluation matching the official IELTS format.
-The transcripts below were generated from audio recordings using Whisper STT.
+══════════════════════════════════════════════════════════════
+CONTEXT
+══════════════════════════════════════════════════════════════
+Topic: ${job.topic || 'General IELTS Speaking'}
+Difficulty: ${job.difficulty || 'Standard'}
+Parts covered: ${partNumbers.join(', ')}
+Total questions: ${totalQuestions}
 
-**CRITICAL REQUIREMENTS:**
-1. Provide modelAnswers for ALL ${totalQuestions} questions - not just the first one
-2. Provide part_analysis for ALL ${partNumbers.length} parts: ${partNumbers.join(', ')}
-3. Provide at least 5 lexical_upgrades and 5 vocabulary_upgrades
-4. Address pauses and hesitations in your fluency assessment
+══════════════════════════════════════════════════════════════
+🚨 CRITICAL: SCORING FOR INADEQUATE RESPONSES 🚨
+══════════════════════════════════════════════════════════════
 
-## Topic
-${job.topic || 'General IELTS Speaking'}
+Apply STRICT penalties for responses that are:
+- OFF-TOPIC or IRRELEVANT to the question
+- Extremely SHORT (under 10 meaningful words)
+- REPETITIVE NONSENSE (e.g., "nice nice nice nice")
+- Single word answers (e.g., "drama", "yes", "no")
+- Just reading the question back
 
-## Difficulty
-${job.difficulty || 'Standard'}
+⚠️ SCORING REQUIREMENTS FOR INADEQUATE RESPONSES:
+- Transcript < 10 meaningful words → Band 2.0-3.0 MAX
+- Off-topic/irrelevant → Band 2.5-3.5 MAX
+- Just repetition of same word → Band 1.5-2.5 MAX
+- Single word or "[NO SPEECH]" → Band 1.0-2.0 MAX
 
-## Transcription Data
+DO NOT give Band 5+ for responses like:
+❌ "nice nice nice that's true" → Band 2.0
+❌ "drama" → Band 1.5
+❌ "yes I think so" (no elaboration) → Band 3.0-3.5
+
+══════════════════════════════════════════════════════════════
+🚨 MANDATORY: EXAMPLES FOR ALL WEAKNESSES 🚨
+══════════════════════════════════════════════════════════════
+
+For EVERY weakness, include a SPECIFIC EXAMPLE from the candidate's actual response.
+
+FORMAT: "Issue description (e.g., 'exact word or phrase from their answer')"
+
+❌ BAD: "Some grammar errors"
+✅ GOOD: "Subject-verb agreement errors (e.g., 'the people goes' instead of 'the people go')"
+
+❌ BAD: "Limited vocabulary"
+✅ GOOD: "Repetitive use of basic words (e.g., used 'good' 4 times instead of 'beneficial', 'excellent')"
+
+══════════════════════════════════════════════════════════════
+🚨 STRICT MODEL ANSWER WORD LIMITS 🚨
+══════════════════════════════════════════════════════════════
+
+Part 1: EXACTLY 30-40 words per answer (target: 35)
+Part 2: EXACTLY 140-160 words (target: 150)
+Part 3: EXACTLY 60-80 words per answer (target: 70)
+
+⚠️ Model answers outside these ranges are INVALID.
+Count words carefully!
+
+══════════════════════════════════════════════════════════════
+TRANSCRIPTION DATA (from Whisper STT)
+══════════════════════════════════════════════════════════════
 ${transcriptSection}
 
-## Pronunciation Estimation (from transcription confidence)
+══════════════════════════════════════════════════════════════
+PRONUNCIATION ESTIMATION (from transcription confidence)
+══════════════════════════════════════════════════════════════
 **Estimated Band:** ${pronunciationEstimate.estimatedBand}
 **Confidence:** ${pronunciationEstimate.confidence}
 ${pronunciationEstimate.evidence.map(e => `- ${e}`).join('\n')}
 
-## Response Format
+Note: Pronunciation is estimated from audio clarity and word recognition confidence.
+Adjust this band ±0.5 based on fluency markers in the transcript.
 
-You MUST return a JSON object with this EXACT structure. Do NOT skip any questions or parts.
+══════════════════════════════════════════════════════════════
+OUTPUT JSON SCHEMA (FOLLOW EXACTLY)
+══════════════════════════════════════════════════════════════
 
 {
   "criteria": {
     "fluency_coherence": {
-      "band": <number 1-9 in 0.5 increments>,
-      "feedback": "<2-3 sentence feedback addressing pauses, hesitations, and flow>",
-      "strengths": ["<strength with example>", "<strength>"],
-      "weaknesses": ["<weakness with quote from transcript>", "<weakness>"],
-      "suggestions": ["<actionable tip>", "<tip>"]
+      "band": <number 1.0-9.0 in 0.5 increments>,
+      "feedback": "<2-3 sentences addressing pauses, hesitations, flow, and coherence>",
+      "strengths": ["<strength with quote example>", "<second strength>"],
+      "weaknesses": ["<weakness (e.g., 'quote from transcript')>", "<second weakness (e.g., 'quote')>"],
+      "suggestions": ["<actionable tip>", "<second tip>"]
     },
     "lexical_resource": {
       "band": <number>,
-      "feedback": "<feedback on vocabulary range and usage>",
-      "strengths": ["<strength>"],
-      "weaknesses": ["<weakness with example>"],
+      "feedback": "<2-3 sentences on vocabulary range, precision, idioms>",
+      "strengths": ["<strength with example>"],
+      "weaknesses": ["<weakness (e.g., 'quote')>"],
       "suggestions": ["<tip>"]
     },
     "grammatical_range": {
       "band": <number>,
-      "feedback": "<feedback on grammar variety and accuracy>",
+      "feedback": "<2-3 sentences on grammar variety and accuracy>",
       "strengths": ["<strength>"],
-      "weaknesses": ["<weakness with example>"],
+      "weaknesses": ["<weakness (e.g., 'quote')>"],
       "suggestions": ["<tip>"]
     },
     "pronunciation": {
       "band": ${pronunciationEstimate.estimatedBand},
-      "feedback": "<feedback noting this is estimated from transcription confidence>",
+      "feedback": "<2 sentences noting this is estimated from audio clarity>",
       "strengths": ["<strength>"],
       "weaknesses": ["<weakness>"],
       "suggestions": ["<tip>"]
     }
   },
-  "summary": "<2-3 sentence overall assessment>",
-  "examiner_notes": "<1 sentence on most critical improvement area>",
+  "summary": "<3-4 sentence overall assessment covering all criteria>",
+  "examiner_notes": "<1-2 sentences on the most critical improvement area>",
   "modelAnswers": [
     ${modelAnswersRequirement}
   ],
   "lexical_upgrades": [
-    {"original": "<word from transcript>", "upgraded": "<better word>", "context": "<sentence>"},
+    {"original": "<actual word from transcript>", "upgraded": "<sophisticated alternative>", "context": "<how to use in sentence>"},
+    {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."}
   ],
   "vocabulary_upgrades": [
-    {"original": "<basic word>", "upgraded": "<advanced word>", "context": "<example>"},
+    {"original": "<basic word from transcript>", "upgraded": "<advanced word>", "context": "<example sentence>"},
+    {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
     {"original": "...", "upgraded": "...", "context": "..."},
@@ -705,21 +774,28 @@ You MUST return a JSON object with this EXACT structure. Do NOT skip any questio
   "part_analysis": [
     ${partAnalysisRequirement}
   ],
-  "improvement_priorities": ["<priority 1>", "<priority 2>"],
-  "strengths_to_maintain": ["<strength 1>", "<strength 2>"]
+  "improvement_priorities": ["<most important priority>", "<second priority>", "<third priority>"],
+  "strengths_to_maintain": ["<key strength to keep>", "<second strength>"]
 }
 
-**MANDATORY RULES:**
-1. modelAnswers array MUST have exactly ${totalQuestions} entries - one for each question
-2. Each modelAnswer MUST have a FULL model answer (Part 1: ~40 words, Part 2: ~140 words, Part 3: ~55 words)
-3. part_analysis array MUST have exactly ${partNumbers.length} entries for parts: ${partNumbers.join(', ')}
-4. Each part_analysis MUST have at least 3 areas_for_improvement with specific quotes
-5. lexical_upgrades MUST have at least 5 entries with real examples from transcript
-6. vocabulary_upgrades MUST have at least 5 entries
-7. If there are long pauses noted, address them in fluency_coherence feedback
-8. Quote directly from the transcript when giving examples
+══════════════════════════════════════════════════════════════
+🚨 MANDATORY VALIDATION CHECKLIST 🚨
+══════════════════════════════════════════════════════════════
 
-Be fair, consistent, and follow official IELTS band descriptors.
+Before outputting, verify:
+- [ ] modelAnswers has EXACTLY ${totalQuestions} entries (one per question)
+- [ ] Each modelAnswer has the FULL question text from the segment
+- [ ] Each modelAnswer has the CORRECT transcript for that question (NOT duplicated)
+- [ ] Model answer word counts: Part 1=35±5, Part 2=150±10, Part 3=70±10
+- [ ] part_analysis has EXACTLY ${partNumbers.length} entries for parts: ${partNumbers.join(', ')}
+- [ ] lexical_upgrades has AT LEAST 6 entries with real examples
+- [ ] vocabulary_upgrades has AT LEAST 6 entries
+- [ ] ALL weaknesses have (e.g., 'quote') examples
+- [ ] Bands are realistic: inadequate responses get Band 2-4, not 5+
+
+🚨 CRITICAL: Each modelAnswer MUST correspond to its specific question with the correct transcript. Do NOT copy the same transcript to all answers.
+
+Be fair, rigorous, and follow official IELTS band descriptors exactly.
 `;
 }
 
