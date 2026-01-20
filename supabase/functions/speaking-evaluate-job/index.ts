@@ -49,8 +49,10 @@ const HEARTBEAT_INTERVAL_MS = 15000;
 const LOCK_DURATION_MINUTES = 5;
 const AI_CALL_TIMEOUT_MS = 120000;
 
-// Retry limits - max 4 retries (5th attempt = final failure)
+// Retry limits: 4 total attempts (initial + 3 retries)
+// First 2 attempts = audio/accuracy mode, remaining 2 = text mode
 const MAX_PART_RETRIES = 4;
+const ACCURACY_MODE_MAX_RETRIES = 2; // Switch to text mode after 2 audio failures
 
 // Error codes for frontend display
 type ErrorCode = 'admin_quota_limit' | 'user_quota_limit' | 'model_overloaded' | 'validation_failed' | 'max_retries_exceeded' | 'unknown_error';
@@ -549,12 +551,11 @@ serve(async (req) => {
         // =================================================================
         // AUTO-FALLBACK: After 2 audio failures, switch to text mode
         // =================================================================
-        const ACCURACY_FALLBACK_THRESHOLD = 2;
-        const accuracyRetries = (partialResultsForRetry.accuracyModeRetries as number) || 0;
         let shouldFallbackToText = false;
         let fallbackTranscripts: Record<string, any> | null = null;
 
-        if (evaluationMode === 'accuracy' && newPartRetries >= ACCURACY_FALLBACK_THRESHOLD) {
+        // Switch to text mode after ACCURACY_MODE_MAX_RETRIES audio failures
+        if (evaluationMode === 'accuracy' && newPartRetries >= ACCURACY_MODE_MAX_RETRIES) {
           // PRIORITY 1: Check browserTranscripts saved in the job's partial_results
           const browserTranscripts = partialResultsForRetry.browserTranscripts;
           
@@ -582,13 +583,17 @@ serve(async (req) => {
               shouldFallbackToText = true;
               fallbackTranscripts = savedTranscripts;
             } else {
-              console.log(`[speaking-evaluate-job] Cannot auto-fallback - no browser transcripts or saved results available`);
+              // Even without transcripts, we should still try text mode as last resort
+              // The text mode can provide model answers based on questions alone
+              console.log(`[speaking-evaluate-job] AUTO-FALLBACK: No saved transcripts, but switching to text mode anyway (will use empty transcripts)`);
+              shouldFallbackToText = true;
+              fallbackTranscripts = {}; // Empty transcripts - text mode will mark as "(No response provided)"
             }
           }
         }
         
-        // Check if we've exceeded max retries for this part
-        if (newPartRetries > MAX_PART_RETRIES && !shouldFallbackToText) {
+        // Check if we've exceeded max retries for this part (>= because we count from 1)
+        if (newPartRetries >= MAX_PART_RETRIES && !shouldFallbackToText) {
           // Determine the specific failure reason
           let failureCode = ERROR_CODES.UNKNOWN;
           let failureMessage = errMsg.slice(0, 150);
@@ -600,7 +605,7 @@ serve(async (req) => {
               : 'All admin API keys have reached their daily quota limit';
           } else if (errorClass.type === 'transient') {
             failureCode = ERROR_CODES.MODEL_OVERLOADED;
-            failureMessage = 'The AI model is overloaded and unavailable. Please try again later.';
+            failureMessage = 'The AI model is overloaded. Please try again in a few minutes.';
           } else if (errorClass.type === 'rate_limit') {
             failureCode = ERROR_CODES.ADMIN_QUOTA;
             failureMessage = 'Rate limit exceeded across all available API keys';
@@ -617,6 +622,7 @@ serve(async (req) => {
                 message: failureMessage,
                 partFailed: partToProcess,
                 retriesExhausted: true,
+                totalAttempts: newPartRetries,
               }),
               lock_token: null,
               lock_expires_at: null,
@@ -627,7 +633,7 @@ serve(async (req) => {
           // Release key WITH cooldown even on final failure
           await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, TIMINGS.KEY_COOLDOWN_SEC);
           
-          console.log(`[speaking-evaluate-job] Part ${partToProcess} max retries exceeded, job marked as failed (${failureCode})`);
+          console.log(`[speaking-evaluate-job] Part ${partToProcess} max retries (${MAX_PART_RETRIES}) exceeded, job marked as failed (${failureCode})`);
           
           return new Response(JSON.stringify({ 
             success: false, 
@@ -643,17 +649,17 @@ serve(async (req) => {
         
         // Update retry count for this part in partial_results
         partialResultsForRetry[partRetryKey] = newPartRetries;
-        partialResultsForRetry.accuracyModeRetries = (accuracyRetries || 0) + 1;
         
         // If auto-fallback, switch mode and update transcripts
-        if (shouldFallbackToText && fallbackTranscripts) {
+        if (shouldFallbackToText && fallbackTranscripts !== null) {
           partialResultsForRetry.evaluationMode = 'basic';
           partialResultsForRetry.transcripts = fallbackTranscripts;
           partialResultsForRetry.autoFallbackFromAccuracy = true;
           console.log(`[speaking-evaluate-job] Switching to text-based evaluation for remaining parts`);
         }
         
-        // ALWAYS release key with 45s cooldown on ANY error
+        // ALWAYS release key with 45s cooldown on ANY error - but DON'T WAIT
+        // This allows immediate retry with a different key
         await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, TIMINGS.KEY_COOLDOWN_SEC);
         
         // Handle specific error types for key marking
@@ -693,11 +699,13 @@ serve(async (req) => {
           })
           .eq('id', jobId);
         
-        console.log(`[speaking-evaluate-job] Part ${partToProcess} error, re-queued for retry after 45s cooldown (next stage: ${nextStage})`);
+        console.log(`[speaking-evaluate-job] Part ${partToProcess} error, re-queued for IMMEDIATE retry with different key (next stage: ${nextStage})`);
         
-        // Schedule retry after cooldown (45s)
+        // CRITICAL FIX: Trigger retry IMMEDIATELY - don't wait for cooldown
+        // The failed key is on cooldown, but we try with a DIFFERENT key immediately
         const triggerRetry = async () => {
-          await sleep(TIMINGS.KEY_COOLDOWN_SEC * 1000); // Wait for cooldown
+          // NO WAIT - trigger immediately with a different key
+          // The failed key has been marked for cooldown, so checkoutKeyForPart will pick a different one
           
           // Choose the right function based on whether we're falling back
           const targetFunction = shouldFallbackToText ? 'process-speaking-job' : 'speaking-evaluate-job';
@@ -712,7 +720,7 @@ serve(async (req) => {
               },
               body: JSON.stringify({ jobId }),
             });
-            console.log(`[speaking-evaluate-job] Retry triggered via ${targetFunction} after ${TIMINGS.KEY_COOLDOWN_SEC}s cooldown`);
+            console.log(`[speaking-evaluate-job] Retry triggered IMMEDIATELY via ${targetFunction} (different key will be used)`);
           } catch (e) {
             console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
           }
