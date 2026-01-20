@@ -591,7 +591,7 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
     .eq('id', jobId);
 
   let evaluationResult: any = null;
-  const MAX_KEY_RETRIES = 3; // Retry each key up to 3 times with backoff
+  const COOLDOWN_SECONDS = 45; // Cooldown after any error before retrying this key
 
   for (const candidateKey of keyQueue) {
     if (evaluationResult) break;
@@ -601,130 +601,138 @@ async function processTextBasedEvaluation(job: any, supabaseService: any, appEnc
     for (const modelName of TEXT_MODELS) {
       if (evaluationResult) break;
 
-      // Retry loop with exponential backoff for each model
-      for (let attempt = 0; attempt < MAX_KEY_RETRIES; attempt++) {
-        try {
-          console.log(`[processTextBasedEvaluation] Trying ${modelName} (attempt ${attempt + 1}/${MAX_KEY_RETRIES})`);
-          
-          // Update heartbeat during evaluation (keep stage as evaluating_text)
-          await supabaseService
-            .from('speaking_evaluation_jobs')
-            .update({ 
-              heartbeat_at: new Date().toISOString(),
-              progress: 30 + (attempt * 10), // Gradual progress within text evaluation
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', jobId);
-          
-          const model = genAI.getGenerativeModel({
-            model: modelName,
-            generationConfig: { 
-              temperature: 0.3, 
-              maxOutputTokens: 8000, // Reduced from 32000 - concise output mode
-              responseMimeType: 'application/json', // Force JSON output
-            },
-          });
+      // Single attempt per key - switch key immediately on ANY error
+      try {
+        console.log(`[processTextBasedEvaluation] Trying ${modelName} with key ${candidateKey.isUserProvided ? '(user)' : `(admin: ${candidateKey.keyId?.slice(0, 8)}...)`}`);
+        
+        // Update heartbeat during evaluation (keep stage as evaluating_text)
+        await supabaseService
+          .from('speaking_evaluation_jobs')
+          .update({ 
+            heartbeat_at: new Date().toISOString(),
+            progress: 40, // Progress during text evaluation
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', jobId);
+        
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: { 
+            temperature: 0.3, 
+            maxOutputTokens: 30000, // Increased to prevent JSON truncation
+            responseMimeType: 'application/json', // Force JSON output
+          },
+        });
 
-          const response = await model.generateContent(prompt);
-          const text = response.response?.text?.() || '';
+        const response = await model.generateContent(prompt);
+        const text = response.response?.text?.() || '';
 
-          if (!text) {
-            console.warn(`[processTextBasedEvaluation] Empty response from ${modelName}`);
-            // Retry on empty response instead of immediately moving on
-            if (attempt < MAX_KEY_RETRIES - 1) {
-              const delay = exponentialBackoffWithJitter(attempt, 1000, 10000);
-              console.log(`[processTextBasedEvaluation] Empty response, retrying in ${Math.round(delay / 1000)}s...`);
-              await sleep(delay);
-              continue;
-            }
-            break; // Move to next model after all retries
+        if (!text) {
+          console.warn(`[processTextBasedEvaluation] Empty response from ${modelName}, switching to next key`);
+          // Empty response - switch to next key immediately (no retry with same key)
+          if (!candidateKey.isUserProvided && candidateKey.keyId) {
+            await supabaseService.rpc('mark_key_rate_limited', {
+              p_key_id: candidateKey.keyId,
+              p_cooldown_minutes: Math.ceil(COOLDOWN_SECONDS / 60),
+            });
           }
+          break; // Move to next key
+        }
 
-          // Log response length for debugging
-          console.log(`[processTextBasedEvaluation] Response length: ${text.length} chars`);
+        // Log response length for debugging
+        console.log(`[processTextBasedEvaluation] Response length: ${text.length} chars`);
 
-          // Update progress: Received response, parsing (70%)
+        // Update progress: Received response, parsing (70%)
+        await supabaseService
+          .from('speaking_evaluation_jobs')
+          .update({ 
+            progress: 70, 
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', jobId);
+
+        const parsed = parseJson(text);
+        if (parsed) {
+          evaluationResult = parsed;
+          console.log(`[processTextBasedEvaluation] Success with ${modelName}`);
+          
+          // Update progress: Evaluation complete, finalizing (85%)
           await supabaseService
             .from('speaking_evaluation_jobs')
             .update({ 
-              progress: 70, 
+              progress: 85, 
               updated_at: new Date().toISOString() 
             })
             .eq('id', jobId);
-
-          const parsed = parseJson(text);
-          if (parsed) {
-            evaluationResult = parsed;
-            console.log(`[processTextBasedEvaluation] Success with ${modelName} on attempt ${attempt + 1}`);
-            
-            // Update progress: Evaluation complete, finalizing (85%)
-            await supabaseService
-              .from('speaking_evaluation_jobs')
-              .update({ 
-                progress: 85, 
-                updated_at: new Date().toISOString() 
-              })
-              .eq('id', jobId);
-            
-            break;
-          } else {
-            // Log first 500 chars to help debug truncation issues
-            console.warn(`[processTextBasedEvaluation] Failed to parse JSON from ${modelName}. First 500 chars: ${text.slice(0, 500)}`);
-            console.warn(`[processTextBasedEvaluation] Last 200 chars: ${text.slice(-200)}`);
-            
-            // If response looks truncated (doesn't end with } or ]), retry
-            const trimmed = text.trim();
-            const looksComplete = trimmed.endsWith('}') || trimmed.endsWith(']');
-            if (!looksComplete && attempt < MAX_KEY_RETRIES - 1) {
-              console.log(`[processTextBasedEvaluation] Response appears truncated, retrying...`);
-              const delay = exponentialBackoffWithJitter(attempt, 2000, 15000);
-              await sleep(delay);
-              continue;
-            }
-            break; // Move to next model
-          }
-        } catch (err: any) {
-          const errMsg = String(err?.message || '');
-          console.error(`[processTextBasedEvaluation] ${modelName} error (attempt ${attempt + 1}):`, errMsg.slice(0, 200));
-
-          // Check for PERMANENT daily quota exhaustion
-          if (isDailyQuotaExhaustedError(err)) {
-            console.log(`[processTextBasedEvaluation] Daily quota exhausted for ${modelName}, marking model exhausted`);
-            if (!candidateKey.isUserProvided && candidateKey.keyId) {
-              await markModelQuotaExhausted(supabaseService, candidateKey.keyId, modelName);
-            }
-            break; // Move to next key - this model is done for the day
-          }
-
-          // Check for temporary rate limit errors - retry with backoff
-          if (isQuotaExhaustedError(errMsg)) {
-            const retryAfter = extractRetryAfterSeconds(err);
-            if (attempt < MAX_KEY_RETRIES - 1) {
-              const delay = retryAfter 
-                ? Math.min(retryAfter * 1000, 60000) 
-                : exponentialBackoffWithJitter(attempt, 2000, 60000);
-              console.log(`[processTextBasedEvaluation] Rate limited, retrying in ${Math.round(delay / 1000)}s...`);
-              await sleep(delay);
-              continue;
-            }
-          }
-
-          // For transient errors, also retry with backoff
-          if (attempt < MAX_KEY_RETRIES - 1) {
-            const delay = exponentialBackoffWithJitter(attempt, 1000, 30000);
-            console.log(`[processTextBasedEvaluation] Transient error, retrying in ${Math.round(delay / 1000)}s...`);
-            await sleep(delay);
-            continue;
-          }
           
-          // All retries exhausted for this model, move to next
           break;
+        } else {
+          // Log first 500 chars to help debug truncation issues
+          console.warn(`[processTextBasedEvaluation] Failed to parse JSON from ${modelName}. First 500 chars: ${text.slice(0, 500)}`);
+          console.warn(`[processTextBasedEvaluation] Last 200 chars: ${text.slice(-200)}`);
+          
+          // Parse failure - switch to next key immediately (no retry with same key)
+          console.log(`[processTextBasedEvaluation] Parse failed, switching to next key (45s cooldown for current)`);
+          if (!candidateKey.isUserProvided && candidateKey.keyId) {
+            await supabaseService.rpc('mark_key_rate_limited', {
+              p_key_id: candidateKey.keyId,
+              p_cooldown_minutes: Math.ceil(COOLDOWN_SECONDS / 60),
+            });
+          }
+          break; // Move to next key
         }
+      } catch (err: any) {
+        const errMsg = String(err?.message || '');
+        console.error(`[processTextBasedEvaluation] ${modelName} error:`, errMsg.slice(0, 200));
+
+        // On ANY error: switch key immediately with 45s cooldown
+        // First, mark the key appropriately based on error type
+        if (isDailyQuotaExhaustedError(err)) {
+          console.log(`[processTextBasedEvaluation] Daily quota exhausted for ${modelName}, marking model exhausted + switching key`);
+          if (!candidateKey.isUserProvided && candidateKey.keyId) {
+            await markModelQuotaExhausted(supabaseService, candidateKey.keyId, modelName);
+          }
+        } else {
+          // Rate limit or transient error - apply 45s cooldown
+          console.log(`[processTextBasedEvaluation] Error on ${modelName}, applying ${COOLDOWN_SECONDS}s cooldown + switching key`);
+          if (!candidateKey.isUserProvided && candidateKey.keyId) {
+            await supabaseService.rpc('mark_key_rate_limited', {
+              p_key_id: candidateKey.keyId,
+              p_cooldown_minutes: Math.ceil(COOLDOWN_SECONDS / 60),
+            });
+          }
+        }
+        
+        // ALWAYS break to next key on ANY error - no retries with same key
+        break;
       }
     }
   }
 
-  if (!evaluationResult) throw new Error('Text evaluation failed: all models/keys exhausted after retries');
+  // If all keys exhausted, queue job for 60s retry instead of failing immediately
+  if (!evaluationResult) {
+    const hasAdminKeys = keyQueue.some(k => !k.isUserProvided);
+    
+    if (hasAdminKeys) {
+      console.log(`[processTextBasedEvaluation] All keys exhausted, queuing for 60s retry`);
+      await supabaseService
+        .from('speaking_evaluation_jobs')
+        .update({
+          status: 'pending',
+          stage: 'pending_text_eval',
+          last_error: 'All API keys temporarily rate-limited, queued for retry in 60s',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', jobId);
+      
+      // Schedule a retry after 60s by throwing a specific error that won't increment retry_count
+      throw new Error('QUEUED_FOR_RETRY: All keys temporarily exhausted, will retry in 60s');
+    }
+    
+    throw new Error('Text evaluation failed: all models/keys exhausted');
+  }
+
+  
 
   // TEXT-BASED EVALUATION PRONUNCIATION PENALTY
   // Since we can't actually hear the pronunciation in text-based mode,
@@ -864,51 +872,41 @@ function buildTextPrompt(
       return a.questionNumber - b.questionNumber;
     });
 
-  // Compact segment format to reduce token usage
+  // Compact segment format to reduce token usage (removed wpm suffix - not used in evaluation)
   const segmentSummaries = orderedSegments.map((seg, idx) => 
-    `[${seg.key}] P${seg.partNum} Q${seg.questionNumber}: "${seg.questionText}"\n> "${seg.transcript}"${seg.wpm > 0 ? ` [${seg.wpm}wpm]` : ''}`
+    `[${seg.key}] P${seg.partNum} Q${seg.questionNumber}: "${seg.questionText}"\n> "${seg.transcript}"`
   ).join('\n\n');
 
   const numSegments = orderedSegments.length;
 
-  return `IELTS Speaking Examiner - Evaluate this candidate strictly per official IELTS band descriptors.
+  return `IELTS Speaking Examiner - Evaluate strictly per official band descriptors.
 
 CONTEXT: Topic: ${topic} | Difficulty: ${difficulty} | Responses: ${numSegments}
 ${fluencyFlag ? '⚠️ Part 2 under 80s - apply fluency penalty.' : ''}
 
-═══════════════════════════════════════════════════════════════════════════════
-CANDIDATE RESPONSES (Speech Recognition Transcripts - Correct Obvious Errors)
-═══════════════════════════════════════════════════════════════════════════════
-
+CANDIDATE RESPONSES (Speech Recognition Transcripts):
 ${segmentSummaries}
 
-═══════════════════════════════════════════════════════════════════════════════
-BAND DESCRIPTORS (Apply Strictly)
-═══════════════════════════════════════════════════════════════════════════════
+BAND DESCRIPTORS:
+FC: 9=fluent | 7=at length | 5=flow with repetition | 4=pauses
+LR: 9=idiomatic | 7=less common vocab | 5=limited | 4=basic
+GR: 9=full range | 7=complex/error-free | 5=basic | 4=basic only
+PR: 9=precise | 7=Band 8 features | 5=issues | 4=unintelligible (auto -0.5)
 
-FLUENCY & COHERENCE: 9=fluent/rare hesitation | 7=speaks at length/some hesitation | 5=maintains flow with repetition | 4=frequent pauses
-LEXICAL RESOURCE: 9=full flexibility/idiomatic | 7=flexible/some less common vocab | 5=limited/pauses for words | 4=basic/repetitive
-GRAMMAR: 9=full range/accurate | 7=complex structures/mostly error-free | 5=basic forms/limited complex | 4=basic only
-PRONUNCIATION: 9=full range/precise | 7=most Band 8 features | 5=some issues/mispronunciations | 4=limited/often unintelligible
-
-NOTE: Pronunciation is estimated from speech patterns. Apply -0.5 adjustment (done automatically).
-
-═══════════════════════════════════════════════════════════════════════════════
-CONCISE JSON OUTPUT (Keep responses short - max 4000 chars total)
-═══════════════════════════════════════════════════════════════════════════════
-
+JSON OUTPUT:
 \`\`\`json
 {
   "overall_band": 6.5,
   "criteria": {
-    "fluency_coherence": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quote"], "suggestions": ["max 2"] },
-    "lexical_resource": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quote"], "suggestions": ["max 2"] },
-    "grammatical_range": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2 with quote"], "suggestions": ["max 2"] },
+    "fluency_coherence": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
+    "lexical_resource": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
+    "grammatical_range": { "band": 6.5, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] },
     "pronunciation": { "band": 6.0, "feedback": "1-2 sentences", "strengths": ["max 2"], "weaknesses": ["max 2"], "suggestions": ["max 2"] }
   },
-  "summary": "2 sentence overall assessment",
-  "examiner_notes": "1 sentence key development area",
-  "vocabulary_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}],
+  "summary": "2 sentence assessment",
+  "examiner_notes": "1 sentence key area",
+  "vocabulary_upgrades": [{"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}, {"original": "...", "upgraded": "...", "context": "..."}],
+  "recognition_corrections": [{"captured": "misheard", "intended": "correct", "context": "sentence"}],
   "part_analysis": [{"part_number": 1, "performance_notes": "1 sentence", "key_moments": ["1 item"], "areas_for_improvement": ["1 item"]}],
   "modelAnswers": [
     {
@@ -919,7 +917,7 @@ CONCISE JSON OUTPUT (Keep responses short - max 4000 chars total)
       "candidateResponse": "Corrected transcript",
       "estimatedBand": 5.5,
       "targetBand": 6.5,
-      "modelAnswer": "Part1=35 words, Part2=80 words, Part3=45 words MAX",
+      "modelAnswer": "Part1=40w, Part2=140w, Part3=50w",
       "whyItWorks": ["max 2 points"],
       "keyImprovements": ["max 2 points"]
     }
@@ -927,15 +925,15 @@ CONCISE JSON OUTPUT (Keep responses short - max 4000 chars total)
 }
 \`\`\`
 
-CRITICAL RULES:
-1. Return EXACTLY ${numSegments} modelAnswers (one per segment)
-2. Use EXACT segment_keys from input: ${orderedSegments.map(s => s.key).join(', ')}
-3. Keep model answers SHORT: Part1=35w, Part2=80w, Part3=45w
-4. Max 2 items per array (strengths, weaknesses, etc.)
-5. Omit vocabulary_upgrades if none needed
-6. DO NOT return transcripts_by_part or transcripts_by_question (we have them already)
+RULES:
+1. Return EXACTLY ${numSegments} modelAnswers with segment_keys: ${orderedSegments.map(s => s.key).join(', ')}
+2. Model answers: Part1=40w, Part2=140w, Part3=50w
+3. Max 2 items per array
+4. Include max 3 vocabulary_upgrades (omit if none needed)
+5. Include max 3 recognition_corrections for speech errors (omit if none)
+6. DO NOT return transcripts_by_part
 
-Return ONLY valid JSON. No preamble.`;
+Return ONLY valid JSON.`;
 }
 
 function buildPrompt(
