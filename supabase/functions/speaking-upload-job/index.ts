@@ -333,9 +333,28 @@ serve(async (req) => {
 
     console.log(`[speaking-upload-job] Upload complete: ${Object.keys(inlineAudioData).length} files, ${(totalSizeBytes / 1024 / 1024).toFixed(2)}MB total`);
 
-    // Trigger the evaluate job
-    const evaluateFunctionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
-    console.log(`[speaking-upload-job] Triggering evaluate job for ${jobId}`);
+    // Check the configured provider to determine which pipeline to use
+    const { data: settingsRow } = await supabaseService
+      .from('speaking_evaluation_settings')
+      .select('provider')
+      .eq('singleton_key', 'default')
+      .maybeSingle();
+    
+    const configuredProvider = settingsRow?.provider || 'gemini';
+    console.log(`[speaking-upload-job] Configured provider: ${configuredProvider}`);
+
+    // Trigger the appropriate evaluate job based on provider
+    let evaluateFunctionName: string;
+    if (configuredProvider === 'groq') {
+      // Groq pipeline: transcribe first, then evaluate
+      evaluateFunctionName = 'groq-speaking-transcribe';
+    } else {
+      // Gemini pipeline: direct evaluation with audio
+      evaluateFunctionName = 'speaking-evaluate-job';
+    }
+
+    const evaluateFunctionUrl = `${supabaseUrl}/functions/v1/${evaluateFunctionName}`;
+    console.log(`[speaking-upload-job] Triggering ${evaluateFunctionName} for ${jobId}`);
     
     fetch(evaluateFunctionUrl, {
       method: 'POST',
@@ -345,9 +364,9 @@ serve(async (req) => {
       },
       body: JSON.stringify({ jobId }),
     }).then(async (res) => {
-      console.log(`[speaking-upload-job] Evaluate job trigger response: ${res.status}`);
+      console.log(`[speaking-upload-job] ${evaluateFunctionName} trigger response: ${res.status}`);
     }).catch((err) => {
-      console.error(`[speaking-upload-job] Failed to trigger evaluate job:`, err);
+      console.error(`[speaking-upload-job] Failed to trigger ${evaluateFunctionName}:`, err);
     });
 
     return new Response(JSON.stringify({ 

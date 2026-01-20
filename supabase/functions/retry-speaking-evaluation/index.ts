@@ -46,6 +46,16 @@ serve(async (req) => {
 
     const supabaseService = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Check the configured provider to determine which pipeline to use
+    const { data: settingsRow } = await supabaseService
+      .from('speaking_evaluation_settings')
+      .select('provider')
+      .eq('singleton_key', 'default')
+      .maybeSingle();
+    
+    const configuredProvider = settingsRow?.provider || 'gemini';
+    console.log(`[retry-speaking-evaluation] Configured provider: ${configuredProvider}`);
+
     // Parse request body (optional jobId for manual retry)
     let specificJobId: string | null = null;
     try {
@@ -176,12 +186,22 @@ serve(async (req) => {
           updatedPartialResults.accuracyModeRetries = accuracyRetryCount + 1;
         }
 
-        // Determine target stage based on EFFECTIVE mode (not just transcript presence)
+        // Determine target stage based on EFFECTIVE mode and provider (not just transcript presence)
         // - basic mode with transcripts: text-based evaluation
         // - accuracy mode OR no transcripts: audio-based evaluation
+        // - For Groq provider: use groq-speaking-transcribe instead of speaking-evaluate-job
         const useTextEval = effectiveMode === 'basic' && (hasTranscripts || updatedPartialResults.transcripts);
         const targetStage = useTextEval ? 'pending_text_eval' : (hasGoogleUris ? 'pending_eval' : 'pending_upload');
-        const targetFunction = useTextEval ? 'process-speaking-job' : (hasGoogleUris ? 'speaking-evaluate-job' : 'speaking-upload-job');
+        
+        let targetFunction: string;
+        if (useTextEval) {
+          targetFunction = 'process-speaking-job';
+        } else if (hasGoogleUris) {
+          // Audio-based evaluation - route based on configured provider
+          targetFunction = configuredProvider === 'groq' ? 'groq-speaking-transcribe' : 'speaking-evaluate-job';
+        } else {
+          targetFunction = 'speaking-upload-job';
+        }
 
         console.log(`[retry-speaking-evaluation] Job ${job.id}: originalMode=${originalEvaluationMode}, effectiveMode=${effectiveMode}, targetStage=${targetStage}`);
 
