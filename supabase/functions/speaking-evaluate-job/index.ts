@@ -49,6 +49,20 @@ const HEARTBEAT_INTERVAL_MS = 15000;
 const LOCK_DURATION_MINUTES = 5;
 const AI_CALL_TIMEOUT_MS = 120000;
 
+// Retry limits - max 4 retries (5th attempt = final failure)
+const MAX_PART_RETRIES = 4;
+
+// Error codes for frontend display
+type ErrorCode = 'admin_quota_limit' | 'user_quota_limit' | 'model_overloaded' | 'validation_failed' | 'max_retries_exceeded' | 'unknown_error';
+const ERROR_CODES: Record<string, ErrorCode> = {
+  ADMIN_QUOTA: 'admin_quota_limit',
+  USER_QUOTA: 'user_quota_limit', 
+  MODEL_OVERLOADED: 'model_overloaded',
+  VALIDATION_FAILED: 'validation_failed',
+  MAX_RETRIES: 'max_retries_exceeded',
+  UNKNOWN: 'unknown_error',
+};
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: number | null = null;
   const timeout = new Promise<never>((_, reject) => {
@@ -513,202 +527,156 @@ serve(async (req) => {
         console.log(`[speaking-evaluate-job] Error classification: ${errorClass.type} - ${errorClass.description}`);
 
         // Handle based on error type
+        // =================================================================
+        // UNIFIED ERROR HANDLING WITH RETRY LIMITS
+        // =================================================================
+        
+        // Get current retry count for this part from job metadata
+        const { data: currentJobState } = await supabaseService
+          .from('speaking_evaluation_jobs')
+          .select('retry_count, partial_results')
+          .eq('id', jobId)
+          .maybeSingle();
+        
+        const partRetryKey = `part${partToProcess}_retries`;
+        const partialResultsForRetry = (currentJobState?.partial_results || {}) as Record<string, any>;
+        const currentPartRetries = (partialResultsForRetry[partRetryKey] as number) || 0;
+        const newPartRetries = currentPartRetries + 1;
+        
+        console.log(`[speaking-evaluate-job] Part ${partToProcess} retry ${newPartRetries}/${MAX_PART_RETRIES}`);
+        
+        // Check if we've exceeded max retries for this part
+        if (newPartRetries > MAX_PART_RETRIES) {
+          // Determine the specific failure reason
+          let failureCode = ERROR_CODES.UNKNOWN;
+          let failureMessage = errMsg.slice(0, 150);
+          
+          if (errorClass.type === 'daily_quota') {
+            failureCode = isUserKey ? ERROR_CODES.USER_QUOTA : ERROR_CODES.ADMIN_QUOTA;
+            failureMessage = isUserKey 
+              ? 'Your personal API key quota is exhausted for today'
+              : 'All admin API keys have reached their daily quota limit';
+          } else if (errorClass.type === 'transient') {
+            failureCode = ERROR_CODES.MODEL_OVERLOADED;
+            failureMessage = 'The AI model is overloaded and unavailable. Please try again later.';
+          } else if (errorClass.type === 'rate_limit') {
+            failureCode = ERROR_CODES.ADMIN_QUOTA;
+            failureMessage = 'Rate limit exceeded across all available API keys';
+          }
+          
+          // Mark job as failed with specific reason
+          await supabaseService
+            .from('speaking_evaluation_jobs')
+            .update({
+              status: 'failed',
+              stage: 'failed',
+              last_error: JSON.stringify({ 
+                code: failureCode, 
+                message: failureMessage,
+                partFailed: partToProcess,
+                retriesExhausted: true,
+              }),
+              lock_token: null,
+              lock_expires_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', jobId);
+          
+          // Release key WITH cooldown even on final failure
+          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, TIMINGS.KEY_COOLDOWN_SEC);
+          
+          console.log(`[speaking-evaluate-job] Part ${partToProcess} max retries exceeded, job marked as failed (${failureCode})`);
+          
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: failureMessage,
+            errorCode: failureCode,
+            retrying: false,
+            failed: true,
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        
+        // Update retry count for this part in partial_results
+        partialResultsForRetry[partRetryKey] = newPartRetries;
+        
+        // ALWAYS release key with 45s cooldown on ANY error
+        await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, TIMINGS.KEY_COOLDOWN_SEC);
+        
+        // Handle specific error types for key marking
         if (errorClass.type === 'rate_limit') {
-          // Mark key as rate-limited (NO RETRY)
           if (!isUserKey && currentKeyId) {
             await markKeyRateLimited(supabaseService, currentKeyId, errorClass.cooldownMinutes);
           }
           await perfLogger.logError(GEMINI_MODEL, `Rate limit: ${errMsg.slice(0, 100)}`, responseTimeMs, currentKeyId !== 'user' ? currentKeyId : undefined);
-          
-          // Release the lock and re-queue for retry with different key
-          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
-          
-          // For rate limit, re-queue the job to try with a different key
-          await supabaseService
-            .from('speaking_evaluation_jobs')
-            .update({
-              status: 'pending',
-              stage: 'pending_eval',
-              last_error: `Rate limit hit (will retry with different key): ${errMsg.slice(0, 100)}`,
-              lock_token: null,
-              lock_expires_at: null,
-              heartbeat_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', jobId);
-          
-          console.log(`[speaking-evaluate-job] Rate limit, re-queued for retry with different key`);
-          
-          // Trigger retry with different key
-          const triggerRetry = async () => {
-            await sleep(3000); // Short delay before retry
-            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
-            try {
-              await fetch(functionUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${supabaseServiceKey}`,
-                },
-                body: JSON.stringify({ jobId }),
-              });
-              console.log(`[speaking-evaluate-job] Retry triggered after rate limit`);
-            } catch (e) {
-              console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
-            }
-          };
-          
-          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-            EdgeRuntime.waitUntil(triggerRetry());
-          } else {
-            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
-          }
-          
-          return new Response(JSON.stringify({ 
-            success: false, 
-            error: 'Rate limit, retrying with different key',
-            retrying: true,
-          }), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-
-        if (errorClass.type === 'daily_quota') {
-          // Mark key as exhausted for the day
+        } else if (errorClass.type === 'daily_quota') {
           if (isUserKey) {
-            // CRITICAL: Mark user's key as exhausted so we fallback to admin keys
             await markUserKeyQuotaExhausted(supabaseService, userId, GEMINI_MODEL);
-            console.log(`[speaking-evaluate-job] User key marked as exhausted, will retry with admin keys`);
           } else if (currentKeyId) {
             await markModelQuotaExhausted(supabaseService, currentKeyId, GEMINI_MODEL);
           }
           await perfLogger.logQuotaExceeded(GEMINI_MODEL, errMsg.slice(0, 100), currentKeyId !== 'user' ? currentKeyId : undefined);
-          
-          // Release the lock and re-queue for retry with different key
-          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
-          
-          // Re-queue the job to try with a different key (admin key if user key was exhausted)
-          await supabaseService
-            .from('speaking_evaluation_jobs')
-            .update({
-              status: 'pending',
-              stage: 'pending_eval',
-              last_error: `Quota exhausted (will retry with different key): ${errMsg.slice(0, 100)}`,
-              lock_token: null,
-              lock_expires_at: null,
-              heartbeat_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', jobId);
-          
-          console.log(`[speaking-evaluate-job] Daily quota exhausted, re-queued for retry with different key`);
-          
-          // Trigger retry with different key
-          const triggerRetry = async () => {
-            await sleep(3000); // Short delay before retry
-            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
-            try {
-              await fetch(functionUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${supabaseServiceKey}`,
-                },
-                body: JSON.stringify({ jobId }),
-              });
-              console.log(`[speaking-evaluate-job] Retry triggered after quota exhaustion`);
-            } catch (e) {
-              console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
-            }
-          };
-          
-          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-            EdgeRuntime.waitUntil(triggerRetry());
-          } else {
-            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
-          }
-          
-          return new Response(JSON.stringify({ 
-            success: false, 
-            error: 'Daily quota exhausted, retrying with different key',
-            retrying: true,
-          }), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-
-        // Handle transient errors (503, timeouts, etc.) - allow retry
-        if (errorClass.type === 'transient') {
+        } else if (errorClass.type === 'transient') {
           await perfLogger.logError(GEMINI_MODEL, `Transient: ${errMsg.slice(0, 100)}`, responseTimeMs, currentKeyId !== 'user' ? currentKeyId : undefined);
-          
-          // Release the key without cooldown and re-queue for retry
-          await releaseKeyWithCooldown(supabaseService, jobId, partToProcess as 1 | 2 | 3, 0);
-          
-          // Re-queue for retry with same or different key
-          await supabaseService
-            .from('speaking_evaluation_jobs')
-            .update({
-              status: 'pending',
-              stage: 'pending_eval',
-              last_error: `Transient error (will retry): ${errMsg.slice(0, 150)}`,
-              lock_token: null,
-              lock_expires_at: null,
-              heartbeat_at: new Date().toISOString(), // Keep heartbeat fresh
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', jobId);
-          
-          console.log(`[speaking-evaluate-job] Transient error, re-queued for retry`);
-          
-          // CRITICAL: Use EdgeRuntime.waitUntil for reliable background trigger
-          const triggerRetry = async () => {
-            await sleep(5000); // Wait 5s before retry
-            
-            const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
-            
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              try {
-                const response = await fetch(functionUrl, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${supabaseServiceKey}`,
-                  },
-                  body: JSON.stringify({ jobId }),
-                });
-                
-                if (response.ok) {
-                  console.log(`[speaking-evaluate-job] Retry triggered successfully (attempt ${attempt})`);
-                  return;
-                }
-              } catch (e) {
-                console.warn(`[speaking-evaluate-job] Retry attempt ${attempt} error:`, e);
-              }
-              
-              if (attempt < 3) await sleep(2000);
-            }
-          };
-
-          if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-            EdgeRuntime.waitUntil(triggerRetry());
-          } else {
-            triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
-          }
-          
-          return new Response(JSON.stringify({ 
-            success: false, 
-            error: 'Transient error, retrying',
-            retrying: true,
-          }), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
         }
+        
+        // Re-queue for retry (preserving partial results from completed parts)
+        await supabaseService
+          .from('speaking_evaluation_jobs')
+          .update({
+            status: 'pending',
+            stage: 'pending_eval',
+            partial_results: partialResultsForRetry,
+            last_error: `Part ${partToProcess} retry ${newPartRetries}/${MAX_PART_RETRIES}: ${errMsg.slice(0, 100)}`,
+            lock_token: null,
+            lock_expires_at: null,
+            heartbeat_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', jobId);
+        
+        console.log(`[speaking-evaluate-job] Part ${partToProcess} error, re-queued for retry after 45s cooldown`);
+        
+        // Schedule retry after cooldown (45s)
+        const triggerRetry = async () => {
+          await sleep(TIMINGS.KEY_COOLDOWN_SEC * 1000); // Wait for cooldown
+          const functionUrl = `${supabaseUrl}/functions/v1/speaking-evaluate-job`;
+          try {
+            await fetch(functionUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({ jobId }),
+            });
+            console.log(`[speaking-evaluate-job] Retry triggered after ${TIMINGS.KEY_COOLDOWN_SEC}s cooldown`);
+          } catch (e) {
+            console.warn(`[speaking-evaluate-job] Retry trigger failed:`, e);
+          }
+        };
+        
+        if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+          EdgeRuntime.waitUntil(triggerRetry());
+        } else {
+          triggerRetry().catch(e => console.error('[speaking-evaluate-job] Background retry failed:', e));
+        }
+        
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: `${errorClass.description} Retrying (${newPartRetries}/${MAX_PART_RETRIES})...`,
+          retrying: true,
+          retryCount: newPartRetries,
+          maxRetries: MAX_PART_RETRIES,
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
 
         // For other permanent errors, just fail
-        await perfLogger.logError(GEMINI_MODEL, errMsg.slice(0, 200), responseTimeMs, currentKeyId !== 'user' ? currentKeyId : undefined);
+        await perfLogger.logError(GEMINI_MODEL, errMsg.slice(0, 200), responseTimeMs, currentKeyId ?? undefined);
         throw new Error(`Part ${partToProcess} evaluation failed: ${errMsg.slice(0, 100)}`);
       }
 
@@ -1053,6 +1021,28 @@ ${fluencyPenalty ? '⚠️ Speaking time under 80 seconds - apply fluency penalt
 - Write "[NO SPEECH]" if silence
 
 ══════════════════════════════════════════════════════════════
+🚨 CRITICAL: STRICT SCORING FOR INADEQUATE RESPONSES 🚨
+══════════════════════════════════════════════════════════════
+
+You MUST apply HARSH penalties for responses that are:
+- OFF-TOPIC or IRRELEVANT to the question
+- Extremely SHORT (under 10 meaningful words)
+- REPETITIVE NONSENSE (e.g., "nice nice nice nice")
+- Single word answers (e.g., "drama", "yes", "no")
+- Just reading the question back
+
+⚠️ SCORING REQUIREMENTS FOR INADEQUATE RESPONSES:
+- If transcript contains < 10 meaningful words → Band 2.0-3.0 MAX
+- If transcript is off-topic/irrelevant → Band 2.5-3.5 MAX
+- If transcript is just repetition of same word → Band 1.5-2.5 MAX
+- If transcript is single word or "[NO SPEECH]" → Band 1.0-2.0 MAX
+
+DO NOT give Band 5+ for responses like:
+❌ "nice nice nice nice that's true" → This is Band 2.0
+❌ "drama" → This is Band 1.5
+❌ "yes I think so" (no elaboration) → This is Band 3.0
+
+══════════════════════════════════════════════════════════════
 AUDIO-TO-QUESTION MAPPING
 ══════════════════════════════════════════════════════════════
 ${numQ} audio file(s) in order:
@@ -1060,14 +1050,14 @@ ${numQ} audio file(s) in order:
 ${audioMappingLines}
 
 ══════════════════════════════════════════════════════════════
-SCORING GUIDELINES
+SCORING GUIDELINES (APPLY STRICTLY!)
 ══════════════════════════════════════════════════════════════
 
-🔴 Band 1-2: Just says question number, no actual answer, <5 words
-🟠 Band 2.5-3.5: 5-10 words, minimal relevance
-🟡 Band 4-4.5: 10-20 words, limited vocabulary
-🟢 Band 5-6: Adequate response length with some development
-🔵 Band 7+: Full, fluent, well-developed responses
+🔴 Band 1-2: Single words, nonsense, repetition, no actual answer, <5 meaningful words
+🟠 Band 2.5-3.5: 5-10 words, minimal/no relevance to question, cannot communicate ideas
+🟡 Band 4-4.5: 10-20 words, limited vocabulary, basic attempt at answering
+🟢 Band 5-6: Adequate response length (20+ words) with some development and relevance
+🔵 Band 7+: Full, fluent, well-developed responses with clear relevance
 
 ══════════════════════════════════════════════════════════════
 🚨 MANDATORY: EXAMPLES FOR ALL WEAKNESSES 🚨

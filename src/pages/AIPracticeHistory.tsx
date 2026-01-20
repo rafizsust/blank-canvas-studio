@@ -395,17 +395,35 @@ export default function AIPracticeHistory() {
             loadTests();
           } else if (job.status === 'failed') {
             const isMaxRetriesReached = (job.retry_count || 0) >= MAX_RETRIES;
+            
+            // Parse structured error if available
+            let errorTitle = 'Evaluation Failed';
+            let errorDescription = job.last_error || 'There was an issue evaluating your speaking test.';
+            
+            try {
+              const parsedError = JSON.parse(job.last_error || '{}');
+              if (parsedError.code) {
+                const errorMessages: Record<string, { title: string; desc: string }> = {
+                  'admin_quota_limit': { title: 'Service Quota Limit', desc: 'Our AI service has reached its daily limit. Please try again tomorrow.' },
+                  'user_quota_limit': { title: 'Your API Key Limit', desc: 'Your personal API key quota is exhausted for today.' },
+                  'model_overloaded': { title: 'AI Overloaded', desc: 'The AI model is currently overloaded. Please try again later.' },
+                  'validation_failed': { title: 'Validation Failed', desc: 'The AI response was invalid. Please retry.' },
+                  'max_retries_exceeded': { title: 'Max Retries', desc: 'Maximum retry attempts reached.' },
+                };
+                const msg = errorMessages[parsedError.code] || { title: 'Evaluation Failed', desc: parsedError.message };
+                errorTitle = msg.title;
+                errorDescription = msg.desc;
+              }
+            } catch { /* use raw error */ }
 
             toast({
-              title: isMaxRetriesReached ? 'Evaluation Permanently Failed' : 'Evaluation Failed',
-              description: isMaxRetriesReached
-                ? 'Max retries exceeded. Please try generating a new test.'
-                : (job.last_error || 'There was an issue evaluating your speaking test. You can retry.'),
+              title: errorTitle,
+              description: errorDescription,
               variant: 'destructive',
             });
 
             if (isMaxRetriesReached) {
-              notifyEvaluationFailed('Max retries exceeded. Please try generating a new test.');
+              notifyEvaluationFailed(errorDescription);
             }
           } else if (job.status === 'stale') {
             toast({
