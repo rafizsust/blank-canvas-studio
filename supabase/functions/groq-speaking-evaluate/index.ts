@@ -26,6 +26,55 @@ const corsHeaders = {
 
 const GROQ_LLM_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
+async function callGroqLLMWithTokenFallback(opts: {
+  apiKey: string;
+  prompt: string;
+  maxTokensCandidates: number[];
+}) {
+  const system = `You are a CERTIFIED SENIOR IELTS Speaking Examiner with 10+ years of experience.
+
+CRITICAL RULES:
+1. Provide accurate, fair assessments following official IELTS band descriptors
+2. ALWAYS respond with valid JSON matching the EXACT schema requested
+3. Provide COMPLETE responses for ALL questions - never skip or duplicate
+4. Each question gets its OWN unique model answer with the CORRECT transcript
+5. Apply STRICT scoring: short/off-topic responses get Band 2-4, NOT Band 5+
+6. EVERY weakness must include a direct quote example from the transcript
+
+DO NOT duplicate answers. Each segment_key corresponds to ONE unique response.`;
+
+  let lastResponse: Response | null = null;
+  for (const maxTokens of opts.maxTokensCandidates) {
+    const res = await fetch(GROQ_LLM_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${opts.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: opts.prompt },
+        ],
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    // If token setting is rejected, try next candidate.
+    if (!res.ok && (res.status === 400 || res.status === 422)) {
+      lastResponse = res;
+      continue;
+    }
+
+    return res;
+  }
+
+  return lastResponse || new Response('Failed to call Groq LLM', { status: 500 });
+}
+
 interface PronunciationEstimate {
   estimatedBand: number;
   confidence: 'low' | 'medium' | 'high';
@@ -161,39 +210,10 @@ serve(async (req) => {
     console.log(`[groq-speaking-evaluate] Calling Llama 3.3 70B...`);
     const startTime = Date.now();
 
-    const llmResponse = await fetch(GROQ_LLM_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${groqApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a CERTIFIED SENIOR IELTS Speaking Examiner with 10+ years of experience.
-
-CRITICAL RULES:
-1. Provide accurate, fair assessments following official IELTS band descriptors
-2. ALWAYS respond with valid JSON matching the EXACT schema requested
-3. Provide COMPLETE responses for ALL questions - never skip or duplicate
-4. Each question gets its OWN unique model answer with the CORRECT transcript
-5. Model answers MUST meet word count requirements (Part 1: 35 words, Part 2: 150 words, Part 3: 70 words)
-6. Apply STRICT scoring: short/off-topic responses get Band 2-4, NOT Band 5+
-7. EVERY weakness must include a direct quote example from the transcript
-
-DO NOT duplicate answers. Each segment_key corresponds to ONE unique response.`
-          },
-          {
-            role: 'user',
-            content: evaluationPrompt
-          }
-        ],
-        temperature: 0.2, // Lower temperature for more consistent output
-        max_tokens: 24000, // Increased for detailed model answers
-        response_format: { type: 'json_object' },
-      }),
+    const llmResponse = await callGroqLLMWithTokenFallback({
+      apiKey: groqApiKey,
+      prompt: evaluationPrompt,
+      maxTokensCandidates: [40000, 24000],
     });
 
     if (!llmResponse.ok) {
@@ -317,8 +337,9 @@ DO NOT duplicate answers. Each segment_key corresponds to ONE unique response.`
           segment_key: t.segmentKey,
           partNumber: t.partNumber,
           questionNumber: t.questionNumber,
-          question: match.question || match.question_text || questionText || '',
-          candidateResponse: match.candidateResponse || match.candidate_response || t.text || '',
+          // Always populate from our own source-of-truth to avoid duplicated/missing question text.
+          question: questionText || `Part ${t.partNumber} Question ${t.questionNumber}`,
+          candidateResponse: t.text || '',
           estimatedBand: typeof match.estimatedBand === 'number' ? match.estimatedBand : undefined,
           targetBand: typeof match.targetBand === 'number' ? match.targetBand : undefined,
           modelAnswer: match.modelAnswer || match.model_answer || '',
@@ -333,7 +354,7 @@ DO NOT duplicate answers. Each segment_key corresponds to ONE unique response.`
         segment_key: t.segmentKey,
         partNumber: t.partNumber,
         questionNumber: t.questionNumber,
-        question: questionText || `Part ${t.partNumber}, Question ${t.questionNumber}`,
+        question: questionText || `Part ${t.partNumber} Question ${t.questionNumber}`,
         candidateResponse: t.text,
         modelAnswer: '',
         whyItWorks: [],
@@ -611,9 +632,9 @@ ${pauseInfo}
 
   // STRICT word limits for model answers (matching Gemini)
   const modelAnswerWordLimits: Record<number, { min: number; max: number; target: number }> = {
-    1: { min: 30, max: 40, target: 35 },  // Part 1: ~35 words per answer
-    2: { min: 140, max: 160, target: 150 }, // Part 2: ~150 words total
-    3: { min: 60, max: 80, target: 70 },  // Part 3: ~70 words per answer
+    1: { min: 55, max: 75, target: 65 },
+    2: { min: 210, max: 260, target: 235 },
+    3: { min: 110, max: 150, target: 130 },
   };
 
   // Build part_analysis requirement
@@ -632,8 +653,6 @@ ${pauseInfo}
       "segment_key": "${s.segment_key}",
       "partNumber": ${s.partNumber},
       "questionNumber": ${s.questionNumber},
-      "question": "${s.question.replace(/"/g, '\\"')}",
-      "candidateResponse": "${s.transcript.slice(0, 80).replace(/"/g, '\\"')}...",
       "estimatedBand": <band for this specific response 1.0-9.0>,
       "targetBand": <estimatedBand + 1, max 9>,
       "modelAnswer": "<COMPLETE ${wordTarget}-word model answer - MUST be exactly ${limits.min}-${limits.max} words>",
@@ -693,9 +712,9 @@ FORMAT: "Issue description (e.g., 'exact word or phrase from their answer')"
 🚨 STRICT MODEL ANSWER WORD LIMITS 🚨
 ══════════════════════════════════════════════════════════════
 
-Part 1: EXACTLY 30-40 words per answer (target: 35)
-Part 2: EXACTLY 140-160 words (target: 150)
-Part 3: EXACTLY 60-80 words per answer (target: 70)
+Part 1: EXACTLY 55-75 words per answer (target: 65)
+Part 2: EXACTLY 210-260 words (target: 235)
+Part 3: EXACTLY 110-150 words per answer (target: 130)
 
 ⚠️ Model answers outside these ranges are INVALID.
 Count words carefully!
@@ -816,8 +835,8 @@ function getQuestionTextFromPayload(payload: any, partNumber: number, questionNu
       // Try to match by question ID from segment key
       const qUuidMatch = segmentKey.match(/q([0-9a-f\-]{8,})/i);
       if (qUuidMatch) {
-        const qId = qUuidMatch[1];
-        const matchedQ = questions.find((q: any) => q.id === qId);
+        const qId = String(qUuidMatch[1]).replace(/^q/i, '');
+        const matchedQ = questions.find((q: any) => String(q.id || '').replace(/^q/i, '') === qId);
         if (matchedQ?.question_text) return matchedQ.question_text;
       }
       
