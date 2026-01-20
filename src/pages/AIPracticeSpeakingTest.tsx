@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils';
 import { AudioLevelIndicator, AudioVolumeControl, AudioWaveformIndicator, SpeakingStateRestoreDialog } from '@/components/speaking';
 import { useFullscreenTest } from '@/hooks/useFullscreenTest';
 import { compressAudio } from '@/utils/audioCompressor';
+import { trimLeadingSilence } from '@/utils/audioSilenceTrimmer';
 import { useAdvancedSpeechAnalysis, SpeechAnalysisResult } from '@/hooks/useAdvancedSpeechAnalysis';
 
 
@@ -431,10 +432,18 @@ export default function AIPracticeSpeakingTest() {
     });
 
   // Convert recordings to MP3 before sending to Gemini / storing in R2.
+  // First trims leading silence to prevent Whisper hallucinations, then compresses.
   // This avoids WebM "0:00" metadata issues on some browsers and improves playback compatibility.
   const toMp3DataUrl = async (blob: Blob, key: string) => {
     try {
-      const file = new File([blob], `${key}.audio`, { type: blob.type || 'audio/webm' });
+      // Step 1: Trim leading silence (up to 3s) to prevent STT hallucinations
+      const { blob: trimmedBlob, trimmedMs } = await trimLeadingSilence(blob);
+      if (trimmedMs > 0) {
+        console.log(`[AIPracticeSpeakingTest] Trimmed ${trimmedMs}ms leading silence from ${key}`);
+      }
+      
+      // Step 2: Compress to MP3
+      const file = new File([trimmedBlob], `${key}.audio`, { type: trimmedBlob.type || 'audio/webm' });
       const mp3File = await compressAudio(file);
       return await blobToDataUrl(mp3File);
     } catch (err) {
