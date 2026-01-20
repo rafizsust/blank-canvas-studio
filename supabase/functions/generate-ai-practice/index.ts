@@ -570,20 +570,25 @@ async function callGemini(
             const modelCallEnd = Date.now() - modelCallStart;
             await perfLogger.logQuotaExceeded(model, errorMessage.slice(0, 200), currentKeyRecord?.id);
             
+            // Apply cooldown/exhaustion before switching keys
+            if (serviceClient && currentKeyRecord) {
+              if (isDailyQuota) {
+                // Daily quota exhaustion - mark model exhausted for this key
+                console.log(`Key ${currentKeyIndex + 1} DAILY QUOTA EXHAUSTED on ${model}, marking exhausted...`);
+                await markModelQuotaExhaustedForGeneration(serviceClient, currentKeyRecord.id, model);
+              } else {
+                // Rate limit (429/TPM/RPM) - apply 45s cooldown
+                console.log(`Key ${currentKeyIndex + 1} rate limited on ${model}, applying 45s cooldown...`);
+                await serviceClient.rpc('mark_key_rate_limited', {
+                  p_key_id: currentKeyRecord.id,
+                  p_cooldown_minutes: 1, // ~45-60 seconds
+                });
+              }
+            }
+            
             // Key rotation: try next DB key if available
             if (dbKeys.length > 0 && currentKeyIndex < dbKeys.length - 1) {
-              console.log(`Key ${currentKeyIndex + 1} ${isDailyQuota ? 'DAILY QUOTA EXHAUSTED' : 'rate limited'} on ${model}, rotating to next key...`);
-              
-              // Increment error count for this key
-              if (serviceClient && currentKeyRecord) {
-                await incrementKeyErrorCount(serviceClient, currentKeyRecord.id);
-                
-                // If it's daily quota exhaustion, mark this model as exhausted for this key
-                if (isDailyQuota) {
-                  await markModelQuotaExhaustedForGeneration(serviceClient, currentKeyRecord.id, model);
-                }
-              }
-              
+              console.log(`Rotating to next key after ${isDailyQuota ? 'quota exhaustion' : 'rate limit'}...`);
               currentKeyIndex++;
               currentKeyRecord = dbKeys[currentKeyIndex];
               currentApiKey = currentKeyRecord.key_value;
@@ -592,8 +597,16 @@ async function callGemini(
               continue;
             }
             
-            // Check if it's a rate limit that might recover with waiting
-            if (retryCount < maxRetries && !isDailyQuota) {
+            // Only one key available OR all keys exhausted - wait 45s and retry with same key
+            if (!isDailyQuota && dbKeys.length === 1 && retryCount < maxRetries) {
+              console.log(`Only one key available and rate limited, waiting 45s before retry...`);
+              await sleep(45000); // Wait 45 seconds
+              retryCount++;
+              continue;
+            }
+            
+            // Check if it's a rate limit that might recover with waiting (no DB keys case)
+            if (retryCount < maxRetries && !isDailyQuota && dbKeys.length === 0) {
               console.log(`Rate limit hit on ${model}, will retry after backoff...`);
               await waitWithBackoff(retryCount);
               retryCount++;

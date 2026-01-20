@@ -135,18 +135,33 @@ ${numQ} audio files in EXACT order:
 ${audioMappingLines}
 
 ══════════════════════════════════════════════════════════════
-SCORING & OUTPUT
+SCORING & OUTPUT (STRICT - LIKE A REAL IELTS EXAMINER)
 ══════════════════════════════════════════════════════════════
 
-Score harshly for poor responses:
-🔴 Band 1-2: Just says question number, no answer, <5 words
-🟠 Band 2.5-3.5: 5-10 words, minimal relevance
-🟡 Band 4-4.5: 10-20 words, basic grammar only
+🚨 MANDATORY SCORING RULES - DO NOT INFLATE SCORES 🚨
 
-MODEL ANSWER WORD COUNTS:
-- Part 1: 30-40 words
-- Part 2: 120-140 words
-- Part 3: 50-55 words (concise analytical response)
+Apply these MANDATORY penalties for inadequate responses:
+
+RESPONSE LENGTH PENALTIES:
+🔴 Band 1.0-2.0: NO RESPONSE / Silence / Just says "pass"
+🔴 Band 2.0-2.5: 1-5 words (e.g., "I don't know", "Maybe yes")
+🟠 Band 3.0-3.5: 6-15 words (one short sentence)
+🟡 Band 4.0-4.5: 16-30 words (2-3 basic sentences)
+🟢 Band 5.0+: Requires 30+ words with coherent content
+
+For Part 2 (Long Turn - should be 1.5-2 minutes):
+- Under 60 words: Band 3.0-4.0 MAXIMUM
+- 60-100 words: Band 4.5-5.0 MAXIMUM
+- 100-150 words: Band 5.0-6.0
+- 150-200 words: Band 6.0-7.0
+- 200+ words: Can score 7.0+
+
+MODEL ANSWER WORD COUNTS (MANDATORY):
+- Part 1: 35-45 words
+- Part 2: 130-150 words (MUST be this long - COUNT THEM!)
+- Part 3: 50-60 words (analytical response)
+
+ALWAYS provide model answers even if transcript is unavailable or empty.
 
 JSON OUTPUT SCHEMA:
 {
@@ -158,7 +173,7 @@ JSON OUTPUT SCHEMA:
     "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": []},
     "pronunciation": {"band": 6.0, "feedback": "...", "strengths": [], "weaknesses": [], "suggestions": []}
   },
-  "summary": "2-3 sentence performance summary",
+  "summary": "2-3 sentence performance summary reflecting ACTUAL performance",
   "transcripts_by_part": {"1": "...", "2": "...", "3": "..."},
   "modelAnswers": [
     {
@@ -166,9 +181,9 @@ JSON OUTPUT SCHEMA:
       "partNumber": 1,
       "questionNumber": 1,
       "question": "...",
-      "candidateResponse": "EXACT transcript",
+      "candidateResponse": "EXACT transcript (or empty if unavailable)",
       "estimatedBand": 5.5,
-      "modelAnswer": "Model response"
+      "modelAnswer": "FULL model answer - Part1=40w, Part2=140w, Part3=55w - ALWAYS PROVIDE"
     }
   ]
 }
@@ -177,7 +192,7 @@ INPUT DATA:
 questions_json: ${questionJson}
 segment_map_json: ${segmentJson}
 
-Return exactly ${numQ} modelAnswers.`;
+FINAL: Return exactly ${numQ} modelAnswers. DO NOT inflate scores for minimal responses.`;
 }
 
 serve(async (req) => {

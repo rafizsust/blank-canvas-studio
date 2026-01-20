@@ -107,30 +107,61 @@ ${numQ} audio files in EXACT order:
 ${audioMappingLines}
 
 ══════════════════════════════════════════════════════════════
-SCORING & OUTPUT LIMITS
+SCORING & OUTPUT LIMITS (STRICT - LIKE A REAL IELTS EXAMINER)
 ══════════════════════════════════════════════════════════════
 
-Score harshly for poor responses:
-🔴 Band 1-2: Just says question number, no answer, <5 words
-🟠 Band 2.5-3.5: 5-10 words, minimal relevance
-🟡 Band 4-4.5: 10-20 words, basic grammar only
+🚨 MANDATORY SCORING RULES - DO NOT INFLATE SCORES 🚨
+
+A real IELTS examiner would NEVER give high scores for minimal responses.
+Apply these MANDATORY penalties:
+
+RESPONSE LENGTH PENALTIES (STRICTLY ENFORCED):
+🔴 Band 1.0-2.0: NO RESPONSE / Silence / Just says "pass" or "skip"
+🔴 Band 2.0-2.5: 1-5 words (e.g., "I don't know", "Maybe yes")
+🟠 Band 3.0-3.5: 6-15 words (one short sentence, minimal content)
+🟡 Band 4.0-4.5: 16-30 words (2-3 basic sentences, underdeveloped)
+🟢 Band 5.0+: Requires 30+ words with coherent content
+
+For Part 2 SPECIFICALLY (Long Turn - should be 1.5-2 minutes):
+- Under 60 words: Band 3.0-4.0 MAXIMUM (severely insufficient)
+- 60-100 words: Band 4.5-5.0 MAXIMUM (insufficient length)
+- 100-150 words: Band 5.0-6.0 (minimum acceptable)
+- 150-200 words: Band 6.0-7.0 (adequate development)
+- 200+ words: Can score 7.0+ if quality is good
+
+REAL EXAMINER MINDSET:
+- Would YOU give someone 6.5 for saying only "I think yes" or "would be very crucial"?
+- A 6.5 means "good command of English" - 3-5 word responses show LIMITED command
+- Short responses = LIMITED vocabulary, LIMITED grammar, POOR fluency
+- If audio shows hesitation/minimal content, score MUST reflect this
 
 IMPORTANT OUTPUT LIMITS:
 - strengths: maximum 2 items per criterion
-- weaknesses: maximum 2 items per criterion (MUST include example quote from transcript in format: "Issue description. Example: 'exact quote from transcript'")
+- weaknesses: maximum 2 items per criterion (MUST include example quote from transcript)
 - suggestions: maximum 2 items per criterion
 - whyItWorks: maximum 2 reasons
 - keyImprovements: maximum 2 items
 - lexical_upgrades: maximum 5 total
 
 MODEL ANSWER WORD COUNTS (STRICT - MUST FOLLOW):
-- Part 1: 30-40 words EXACTLY (natural, conversational - do NOT exceed)
-- Part 2: 120-140 words EXACTLY (covers all cue card points with examples - this is the long turn)
-- Part 3: 50-55 words EXACTLY (concise analytical response with one supporting example)
+- Part 1: 35-45 words (natural, conversational with supporting details)
+- Part 2: 130-150 words (MANDATORY - covers all cue card points with examples - this is the LONG TURN)
+- Part 3: 50-60 words (analytical response with reasoning and example)
+
+For Part 2 model answers, you MUST:
+1. Write 130-150 words (COUNT THEM!)
+2. Address ALL bullet points from the cue card
+3. Include personal examples and details
+4. Use varied vocabulary and sentence structures
+
+ALWAYS PROVIDE MODEL ANSWERS:
+- Even if the candidate's response is empty or says "[NO SPEECH]" or "[INAUDIBLE]"
+- Model answers help the candidate learn what they SHOULD have said
+- Never skip a model answer - provide it regardless of candidate performance
 
 LENGTH ASSESSMENT RULES:
 - NEVER criticize responses for being too long. Longer responses demonstrate willingness to speak at length.
-- ONLY flag responses as insufficient if they are TOO SHORT for the expected task (e.g., Part 2 under 80 seconds)
+- ONLY flag responses as insufficient if they are TOO SHORT for the expected task
 - Verbose responses are a STRENGTH, not a weakness.
 
 ══════════════════════════════════════════════════════════════
@@ -157,7 +188,7 @@ JSON OUTPUT SCHEMA
     "grammatical_range": {"band": 5.5, "feedback": "...", "strengths": [...], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": [...]},
     "pronunciation": {"band": 6.0, "feedback": "...", "strengths": [...], "weaknesses": ["Issue + Example: 'quote'"], "suggestions": [...]}
   },
-  "summary": "2-3 sentence performance summary",
+  "summary": "2-3 sentence performance summary reflecting ACTUAL performance",
   "lexical_upgrades": [{"original": "good", "upgraded": "beneficial", "context": "usage"}],
   "part_analysis": [{"part_number": 1, "performance_notes": "...", "key_moments": [], "areas_for_improvement": []}],
   "transcripts_by_part": {"1": "...", "2": "...", "3": "..."},
@@ -174,7 +205,7 @@ JSON OUTPUT SCHEMA
       "candidateResponse": "EXACT transcript - NO FABRICATION",
       "estimatedBand": 5.5,
       "targetBand": 6.5,
-      "modelAnswer": "Concise 50/150/80 word model response",
+      "modelAnswer": "FULL model answer: Part1=40w, Part2=140w (COUNT!), Part3=55w - ALWAYS PROVIDE",
       "whyItWorks": ["reason1","reason2"],
       "keyImprovements": ["improvement1"]
     }
@@ -185,7 +216,11 @@ INPUT DATA:
 questions_json: ${questionJson}
 segment_map_json (${numQ} segments): ${segmentJson}
 
-FINAL: Return exactly ${numQ} modelAnswers. candidateResponse MUST be EXACT words from audio.`;
+FINAL RULES:
+1. Return exactly ${numQ} modelAnswers with candidateResponse = EXACT words from audio
+2. Model answer lengths: Part1=35-45w, Part2=130-150w (COUNT!), Part3=50-60w
+3. ALWAYS provide model answers even if transcript is "[NO SPEECH]" or "[INAUDIBLE]"
+4. DO NOT inflate scores - a 3-word response CANNOT score above 3.0`;
 }
 
 function computeOverallBandFromQuestionBands(result: any): number | null {
