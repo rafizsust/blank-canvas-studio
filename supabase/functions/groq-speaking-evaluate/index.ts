@@ -678,10 +678,25 @@ ${pronunciationInstruction}
    - "There may be pronunciation errors"
 If you cannot provide a specific quoted example, DO NOT include that weakness.
 
-**CRITICAL - LEXICAL UPGRADES FORMAT:**
-In lexical_upgrades, the "context" field MUST contain the candidate's ORIGINAL phrase (not the improved version):
-✅ CORRECT: {"original": "good", "upgraded": "exceptional", "context": "The service was good"}
-❌ WRONG: {"original": "good", "upgraded": "exceptional", "context": "The service was exceptional"}
+**CRITICAL - LEXICAL UPGRADES FORMAT (STRICTLY ENFORCED):**
+══════════════════════════════════════════════════════════════
+⚠️ The "context" field MUST contain the EXACT ORIGINAL phrase FROM THE TRANSCRIPT.
+⚠️ DO NOT include the upgraded word in the context - only the original words!
+⚠️ Copy-paste the EXACT phrase from the transcript where the word appeared.
+
+✅ CORRECT EXAMPLES:
+{"original": "good", "upgraded": "exceptional", "context": "The service was good"}
+{"original": "very", "upgraded": "extremely", "context": "It was very interesting"}
+{"original": "a lot of", "upgraded": "numerous", "context": "There are a lot of problems"}
+
+❌ WRONG EXAMPLES (DO NOT DO THIS):
+{"original": "good", "upgraded": "exceptional", "context": "The service was exceptional"} <- WRONG: shows upgraded word
+{"original": "very", "upgraded": "extremely", "context": "It was extremely interesting"} <- WRONG: shows upgraded word
+{"original": "nice", "upgraded": "pleasant", "context": "a pleasant experience"} <- WRONG: shows upgraded word
+
+VALIDATION RULE: The "context" field must contain the "original" word, NOT the "upgraded" word.
+If the context contains the upgraded word, your response is INVALID.
+══════════════════════════════════════════════════════════════
 
 **CRITICAL - MODEL ANSWER WORD COUNT REQUIREMENTS (STRICTLY ENFORCED):**
 ⚠️ PART 1: Each answer MUST be AT LEAST 50 words (aim for 55-65 words)
@@ -711,18 +726,19 @@ WORD COUNTS AND UPGRADE COUNTS ARE STRICTLY ENFORCED. Short outputs are UNACCEPT
   "summary": "<2 sentence overall summary>",
   "examiner_notes": "<1 sentence key observation>",
   "modelAnswers": [${modelAnswersReq}],
-  "lexical_upgrades": [{"original": "word", "upgraded": "better_word", "context": "original phrase as spoken"}, ... (AT LEAST 10 ENTRIES)],
+  "lexical_upgrades": [{"original": "word", "upgraded": "better_word", "context": "EXACT phrase from transcript containing original word"}, ... (AT LEAST 10 ENTRIES)],
   "part_notes": [],
   "improvement_priorities": ["...", "..."],
   "strengths_to_maintain": ["..."]
 }
 
-FINAL CHECKS BEFORE RESPONDING:
-1. Part 2 modelAnswer has 180+ words? COUNT THEM!
-2. All weaknesses have quoted examples from the transcript?
-3. All lexical_upgrades have context showing the ORIGINAL phrase?
-4. At least 10 lexical_upgrades provided?
-5. No vague pronunciation claims without evidence?`;
+FINAL VALIDATION CHECKLIST (ALL MUST PASS):
+1. ✓ Part 2 modelAnswer has 180+ words? COUNT THEM!
+2. ✓ All weaknesses have quoted examples from the transcript?
+3. ✓ Every lexical_upgrades "context" contains the "original" word (NOT the "upgraded" word)?
+4. ✓ At least 10 lexical_upgrades provided?
+5. ✓ No vague pronunciation claims without evidence?
+6. ✓ Context is EXACT quote from transcript, not a rewritten sentence?`;
 }
 
 function getQuestionTextFromPayload(payload: any, partNumber: number, questionNumber: number, segmentKey: string): string {
