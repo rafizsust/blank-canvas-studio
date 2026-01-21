@@ -1,11 +1,15 @@
 /**
  * IndexedDB-based audio persistence for speaking tests.
  * Allows resubmission from history even after navigating away.
+ * 
+ * KEY FEATURE: Audio is saved IMMEDIATELY after each question recording,
+ * not just at the end of the test. This prevents data loss on crashes.
  */
 
 const DB_NAME = 'speaking_audio_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Bump version for new meta store
 const STORE_NAME = 'audio_segments';
+const META_STORE_NAME = 'test_meta';
 
 export interface PersistedAudioSegment {
   key: string;
@@ -23,8 +27,11 @@ export interface PersistedTestMeta {
   testId: string;
   topic?: string;
   difficulty?: string;
+  evaluationMode?: 'basic' | 'accuracy';
   savedAt: number;
   segmentKeys: string[];
+  lastPart?: 1 | 2 | 3;
+  lastQuestionIndex?: number;
 }
 
 // Open IndexedDB connection
@@ -41,6 +48,11 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
         store.createIndex('testId', 'testId', { unique: false });
+      }
+      
+      // Add meta store for test-level information
+      if (!db.objectStoreNames.contains(META_STORE_NAME)) {
+        db.createObjectStore(META_STORE_NAME, { keyPath: 'testId' });
       }
     };
   });
@@ -233,8 +245,9 @@ export async function getTestsWithPersistedAudio(): Promise<string[]> {
 export async function cleanupOldAudio(): Promise<void> {
   try {
     const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = db.transaction([STORE_NAME, META_STORE_NAME], 'readwrite');
     const store = tx.objectStore(STORE_NAME);
+    const metaStore = tx.objectStore(META_STORE_NAME);
     
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000; // 7 days
     
@@ -245,11 +258,19 @@ export async function cleanupOldAudio(): Promise<void> {
     });
     
     let deleted = 0;
+    const testIdsToCleanup = new Set<string>();
+    
     for (const record of allRecords) {
       if (record.savedAt < cutoff) {
         store.delete(record.key);
+        testIdsToCleanup.add(record.testId);
         deleted++;
       }
+    }
+    
+    // Also clean up meta records for deleted tests
+    for (const testId of testIdsToCleanup) {
+      metaStore.delete(testId);
     }
     
     await new Promise<void>((resolve, reject) => {
@@ -263,5 +284,151 @@ export async function cleanupOldAudio(): Promise<void> {
     }
   } catch (err) {
     console.error('[useSpeakingAudioPersistence] Failed to cleanup old audio:', err);
+  }
+}
+
+/**
+ * Save test metadata (topic, difficulty, evaluation mode)
+ * Call this when starting a test so history page can show context
+ */
+export async function saveTestMeta(meta: Omit<PersistedTestMeta, 'savedAt' | 'segmentKeys'>): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(META_STORE_NAME);
+    
+    const record: PersistedTestMeta = {
+      ...meta,
+      savedAt: Date.now(),
+      segmentKeys: [],
+    };
+    
+    store.put(record);
+    
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    
+    db.close();
+  } catch (err) {
+    console.warn('[useSpeakingAudioPersistence] Failed to save test meta:', err);
+  }
+}
+
+/**
+ * Get test metadata
+ */
+export async function getTestMeta(testId: string): Promise<PersistedTestMeta | null> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(META_STORE_NAME, 'readonly');
+    const store = tx.objectStore(META_STORE_NAME);
+    
+    const meta: PersistedTestMeta | undefined = await new Promise((resolve, reject) => {
+      const request = store.get(testId);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    
+    db.close();
+    return meta || null;
+  } catch (err) {
+    console.warn('[useSpeakingAudioPersistence] Failed to get test meta:', err);
+    return null;
+  }
+}
+
+/**
+ * Update test metadata with latest progress
+ */
+export async function updateTestMetaProgress(
+  testId: string,
+  lastPart: 1 | 2 | 3,
+  lastQuestionIndex: number
+): Promise<void> {
+  try {
+    const existing = await getTestMeta(testId);
+    if (!existing) return;
+    
+    const db = await openDB();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(META_STORE_NAME);
+    
+    store.put({
+      ...existing,
+      lastPart,
+      lastQuestionIndex,
+      savedAt: Date.now(),
+    });
+    
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    
+    db.close();
+  } catch (err) {
+    console.warn('[useSpeakingAudioPersistence] Failed to update test meta progress:', err);
+  }
+}
+
+/**
+ * Delete test metadata
+ */
+export async function deleteTestMeta(testId: string): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(META_STORE_NAME);
+    
+    store.delete(testId);
+    
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    
+    db.close();
+  } catch (err) {
+    console.warn('[useSpeakingAudioPersistence] Failed to delete test meta:', err);
+  }
+}
+
+/**
+ * Get all test IDs that have both persisted audio AND meta
+ * Returns richer info for history page
+ */
+export async function getRecoverableTests(): Promise<Array<{
+  testId: string;
+  meta: PersistedTestMeta | null;
+  segmentCount: number;
+  totalDuration: number;
+}>> {
+  try {
+    const testIds = await getTestsWithPersistedAudio();
+    const results: Array<{
+      testId: string;
+      meta: PersistedTestMeta | null;
+      segmentCount: number;
+      totalDuration: number;
+    }> = [];
+    
+    for (const testId of testIds) {
+      const segments = await loadAudioSegments(testId);
+      const meta = await getTestMeta(testId);
+      
+      results.push({
+        testId,
+        meta,
+        segmentCount: segments.length,
+        totalDuration: segments.reduce((acc, s) => acc + s.duration, 0),
+      });
+    }
+    
+    return results;
+  } catch (err) {
+    console.error('[useSpeakingAudioPersistence] Failed to get recoverable tests:', err);
+    return [];
   }
 }

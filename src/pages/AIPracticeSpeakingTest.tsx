@@ -20,12 +20,17 @@ import {
   type SpeakingSubmissionStage 
 } from '@/lib/speakingSubmissionTracker';
 import {
+  saveAudioSegment,
   saveAllAudioSegments,
   deleteAudioSegments,
   loadAudioSegments,
   cleanupOldAudio,
+  saveTestMeta,
+  updateTestMetaProgress,
+  deleteTestMeta,
   type PersistedAudioSegment,
 } from '@/hooks/useSpeakingAudioPersistence';
+import { SpeakingTestErrorBoundary } from '@/components/common/SpeakingTestErrorBoundary';
 import {
   Clock,
   Mic,
@@ -95,7 +100,7 @@ interface PartRecordingMeta {
   duration?: number;
 }
 
-export default function AIPracticeSpeakingTest() {
+function AIPracticeSpeakingTest() {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -708,14 +713,29 @@ export default function AIPracticeSpeakingTest() {
         const duration = Math.max(0, (Date.now() - pending.startMs) / 1000);
         const chunks = [...audioChunksRef.current];
 
+        const segmentData = {
+          ...pending.meta,
+          chunks,
+          duration,
+        };
+
         setAudioSegments((prev) => ({
           ...prev,
-          [pending.key]: {
-            ...pending.meta,
-            chunks,
-            duration,
-          },
+          [pending.key]: segmentData,
         }));
+
+        // IMMEDIATE PERSISTENCE: Save audio to IndexedDB right after recording
+        // This prevents data loss if the page crashes or is refreshed
+        if (testId) {
+          saveAudioSegment(testId, segmentData).catch(err => {
+            console.warn('[AIPracticeSpeakingTest] Failed to persist audio segment:', err);
+          });
+          
+          // Update test meta with latest progress
+          updateTestMetaProgress(testId, segmentData.partNumber, segmentData.questionNumber - 1).catch(err => {
+            console.warn('[AIPracticeSpeakingTest] Failed to update test meta progress:', err);
+          });
+        }
 
         // IMMEDIATE BACKGROUND UPLOAD: Queue this segment for processing
         // This happens as soon as the user stops recording, not at the end of the test
@@ -1604,8 +1624,11 @@ export default function AIPracticeSpeakingTest() {
           });
         }
 
-        // Delete persisted audio (uploaded successfully)
-        if (testId) await deleteAudioSegments(testId);
+        // Delete persisted audio and meta (uploaded successfully)
+        if (testId) {
+          await deleteAudioSegments(testId);
+          await deleteTestMeta(testId);
+        }
 
         // Track topic completion
         if (test?.topic) incrementCompletion(test.topic);
@@ -2214,6 +2237,18 @@ export default function AIPracticeSpeakingTest() {
     // Start test timer for global timeout protection
     testStartTimeRef.current = Date.now();
     
+    // Save test metadata for crash recovery
+    if (testId && test) {
+      saveTestMeta({
+        testId,
+        topic: test.topic,
+        difficulty: test.difficulty,
+        evaluationMode,
+      }).catch(err => {
+        console.warn('[AIPracticeSpeakingTest] Failed to save test meta:', err);
+      });
+    }
+    
     // Prefetch all Part 1 audio when test starts
     prefetchPartAudio(1);
     
@@ -2812,5 +2847,14 @@ export default function AIPracticeSpeakingTest() {
         </div>
       </main>
     </div>
+  );
+}
+
+// Wrapper with error boundary
+export default function AIPracticeSpeakingTestWithErrorBoundary() {
+  return (
+    <SpeakingTestErrorBoundary>
+      <AIPracticeSpeakingTest />
+    </SpeakingTestErrorBoundary>
   );
 }
