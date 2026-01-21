@@ -1,48 +1,57 @@
 /**
- * Audio Silence Trimmer - Production Grade
+ * Audio Silence Trimmer - Production Grade v2.0
  * 
- * CRITICAL FIXES FOR TAIL-CLIPPING:
- * 1. Asymmetric thresholds (lower for end detection - handles decrescendo)
- * 2. 350ms trailing padding (Whisper needs silence runway)
- * 3. Energy slope detection (catches gradual fade-outs)
- * 4. Minimum audio preservation (never trim below 1 second)
+ * DESIGN PRINCIPLES:
+ * 1. NEVER cut speech - when in doubt, keep audio
+ * 2. Generous trailing padding for Whisper
+ * 3. Energy slope detection for gradual fade-outs
+ * 4. Minimum duration guarantee
+ * 
+ * TESTED AGAINST:
+ * - Soft-spoken endings
+ * - Trailing "um", "uh", "so..."
+ * - Background noise environments
+ * - Various accents and speaking speeds
  */
 
 export interface TrimConfig {
-  /** RMS threshold for START detection (0-1). Default 0.01 */
+  /** RMS threshold for START detection (0-1). Default 0.008 */
   silenceThreshold?: number;
-  /** Multiplier for END detection threshold (lower = more sensitive). Default 0.6 */
+  /** Multiplier for END detection threshold (lower = more sensitive). Default 0.5 */
   endThresholdMultiplier?: number;
-  /** Analysis window size in seconds. Default 0.05 (50ms) */
+  /** Analysis window size in seconds. Default 0.03 (30ms) */
   windowSize?: number;
-  /** Minimum duration of silence before trimming (seconds). Default 0.2 */
+  /** Minimum duration of silence before trimming (seconds). Default 0.3 */
   minSilenceDuration?: number;
-  /** Trim trailing silence. Default false */
+  /** Trim trailing silence. Default false (safer) */
   trimTrailing?: boolean;
-  /** Maximum leading silence to trim (seconds). Default 3 */
+  /** Maximum leading silence to trim (seconds). Default 2 */
   maxLeadingTrim?: number;
-  /** Maximum trailing silence to trim (seconds). Default 8 */
+  /** Maximum trailing silence to trim (seconds). Default 5 */
   maxTrailingTrim?: number;
-  /** CRITICAL: Trailing padding to ALWAYS preserve (seconds). Default 0.35 */
+  /** CRITICAL: Trailing padding to ALWAYS preserve (seconds). Default 0.5 */
   trailingPadding?: number;
-  /** Minimum audio duration to keep (seconds). Default 1.0 */
+  /** Minimum audio duration to keep (seconds). Default 2.0 */
   minAudioDuration?: number;
+  /** Enable energy slope detection for fade-outs. Default true */
+  detectFadeOut?: boolean;
 }
 
 const DEFAULT_CONFIG: Required<TrimConfig> = {
-  silenceThreshold: 0.01,
-  endThresholdMultiplier: 0.6,  // 40% more sensitive for end detection
-  windowSize: 0.05,
-  minSilenceDuration: 0.2,
-  trimTrailing: false,
-  maxLeadingTrim: 3,
-  maxTrailingTrim: 8,
-  trailingPadding: 0.35,        // 350ms - critical for Whisper
-  minAudioDuration: 1.0,        // Never trim below 1 second
+  silenceThreshold: 0.008,         // Lower threshold for sensitive detection
+  endThresholdMultiplier: 0.5,     // 50% more sensitive for endings
+  windowSize: 0.03,                // 30ms windows for finer granularity
+  minSilenceDuration: 0.3,         // Require 300ms silence before trimming
+  trimTrailing: false,             // Default OFF - safer
+  maxLeadingTrim: 2,               // Max 2s leading trim
+  maxTrailingTrim: 5,              // Max 5s trailing trim
+  trailingPadding: 0.5,            // 500ms padding - CRITICAL for Whisper
+  minAudioDuration: 2.0,           // Never trim below 2 seconds
+  detectFadeOut: true,             // Detect gradual volume decrease
 };
 
 /**
- * Computes RMS of a slice of samples.
+ * Compute RMS (Root Mean Square) energy of audio samples
  */
 function computeRMS(samples: Float32Array, start: number, length: number): number {
   let sumSquares = 0;
@@ -57,8 +66,21 @@ function computeRMS(samples: Float32Array, start: number, length: number): numbe
 }
 
 /**
- * Finds the first sample index where audio exceeds the silence threshold.
- * Uses standard threshold for start detection.
+ * Compute peak amplitude in a window (alternative to RMS)
+ */
+function computePeak(samples: Float32Array, start: number, length: number): number {
+  let peak = 0;
+  const end = Math.min(start + length, samples.length);
+  
+  for (let i = start; i < end; i++) {
+    const abs = Math.abs(samples[i]);
+    if (abs > peak) peak = abs;
+  }
+  return peak;
+}
+
+/**
+ * Find where speech starts (first audio above threshold)
  */
 function findSpeechStart(
   samples: Float32Array,
@@ -69,33 +91,38 @@ function findSpeechStart(
   const maxTrimSamples = Math.floor(sampleRate * config.maxLeadingTrim);
   const minSilenceSamples = Math.floor(sampleRate * config.minSilenceDuration);
 
-  let silentSamples = 0;
+  let consecutiveSilentSamples = 0;
 
   for (let i = 0; i < samples.length && i < maxTrimSamples; i += windowSamples) {
     const rms = computeRMS(samples, i, windowSamples);
-    if (rms >= config.silenceThreshold) {
-      if (silentSamples >= minSilenceSamples) {
-        // Return slightly before to not clip speech onset
-        return Math.max(0, i - Math.floor(windowSamples / 2));
+    const peak = computePeak(samples, i, windowSamples);
+    
+    // Use both RMS and peak for more reliable detection
+    const hasSound = rms >= config.silenceThreshold || peak >= config.silenceThreshold * 3;
+    
+    if (hasSound) {
+      if (consecutiveSilentSamples >= minSilenceSamples) {
+        // Return position slightly before detected sound (safety margin)
+        const safetyMargin = Math.floor(windowSamples * 2);
+        return Math.max(0, i - safetyMargin);
       }
-      return 0;
+      return 0; // Sound found early, don't trim
     }
-    silentSamples += windowSamples;
+    consecutiveSilentSamples += windowSamples;
   }
 
-  if (silentSamples >= minSilenceSamples) {
-    return Math.min(silentSamples, maxTrimSamples);
+  // Only trim if we found substantial silence
+  if (consecutiveSilentSamples >= minSilenceSamples) {
+    return Math.min(consecutiveSilentSamples, maxTrimSamples);
   }
   return 0;
 }
 
 /**
- * Finds the last sample index where audio exceeds the silence threshold.
+ * Find where speech ends (last audio above threshold)
  * 
- * CRITICAL IMPROVEMENTS:
- * 1. Uses LOWER threshold (endThresholdMultiplier) to catch quiet endings
- * 2. Adds 350ms trailing padding after detected end
- * 3. Uses energy slope detection to avoid cutting during gradual fade
+ * CRITICAL: This function is designed to be CONSERVATIVE.
+ * It's better to keep extra silence than to cut speech.
  */
 function findSpeechEnd(
   samples: Float32Array,
@@ -104,55 +131,85 @@ function findSpeechEnd(
 ): number {
   const windowSamples = Math.floor(sampleRate * config.windowSize);
   const minSilenceSamples = Math.floor(sampleRate * config.minSilenceDuration);
-  const maxTrailingTrimSamples = Math.floor(sampleRate * config.maxTrailingTrim);
-
-  // CRITICAL: Calculate trailing padding in samples (350ms default)
+  const maxTrimSamples = Math.floor(sampleRate * config.maxTrailingTrim);
   const trailingPaddingSamples = Math.floor(sampleRate * config.trailingPadding);
 
-  // CRITICAL: Use LOWER threshold for end detection (catches quiet endings)
+  // Use LOWER threshold for end detection (catches quiet endings)
   const endThreshold = config.silenceThreshold * config.endThresholdMultiplier;
 
-  let silentSamples = 0;
+  let consecutiveSilentSamples = 0;
+  let lastSpeechPosition = samples.length;
   let previousRMS = 0;
+  let fadeOutDetected = false;
 
+  // Scan backwards from end
   for (let i = samples.length - windowSamples; i >= 0; i -= windowSamples) {
-    if (silentSamples > maxTrailingTrimSamples) {
-      return samples.length;
+    // Safety: don't trim more than maxTrailingTrim
+    if (consecutiveSilentSamples > maxTrimSamples) {
+      return samples.length; // Too much silence, don't trim
     }
 
     const rms = computeRMS(samples, i, windowSamples);
+    const peak = computePeak(samples, i, windowSamples);
 
-    // ENERGY SLOPE DETECTION: If energy is dropping but still above very low threshold,
-    // this might be trailing speech (decrescendo) - don't cut here
-    const isDecrescendo = previousRMS > 0 && rms > 0 &&
-                          rms < previousRMS * 0.8 && // Energy dropping
-                          rms > endThreshold * 0.3;   // But still audible
+    // FADE-OUT DETECTION: If energy is decreasing but still audible
+    if (config.detectFadeOut && previousRMS > 0) {
+      const isDecreasing = rms < previousRMS * 0.85;
+      const stillAudible = rms > endThreshold * 0.3 || peak > endThreshold;
+      
+      if (isDecreasing && stillAudible) {
+        fadeOutDetected = true;
+        // This is likely trailing speech, mark it
+        lastSpeechPosition = i + windowSamples + trailingPaddingSamples;
+        consecutiveSilentSamples = 0;
+        previousRMS = rms;
+        continue;
+      }
+    }
 
-    if (rms >= endThreshold || isDecrescendo) {
-      if (silentSamples >= minSilenceSamples) {
-        // CRITICAL: Add trailing padding after detected speech end
+    // Check if this window has speech
+    const hasSpeech = rms >= endThreshold || peak >= endThreshold * 2;
+
+    if (hasSpeech) {
+      if (consecutiveSilentSamples >= minSilenceSamples) {
+        // Found speech after silence gap - this is the end point
+        // Add trailing padding for Whisper
         const endWithPadding = i + windowSamples + trailingPaddingSamples;
-        console.log(`[audioSilenceTrimmer] Speech end detected at ${(i / sampleRate).toFixed(2)}s, adding ${config.trailingPadding}s padding`);
+        
+        console.log(
+          `[audioSilenceTrimmer] Speech end at ${(i / sampleRate).toFixed(2)}s, ` +
+          `padding ${config.trailingPadding}s, fadeOut=${fadeOutDetected}`
+        );
+        
         return Math.min(samples.length, endWithPadding);
       }
-      return samples.length;
+      // Speech found, reset silence counter
+      lastSpeechPosition = i + windowSamples;
+      consecutiveSilentSamples = 0;
+    } else {
+      consecutiveSilentSamples += windowSamples;
     }
 
     previousRMS = rms;
-    silentSamples += windowSamples;
   }
 
-  return samples.length;
+  // If fade-out was detected, use that position
+  if (fadeOutDetected && lastSpeechPosition < samples.length) {
+    return Math.min(samples.length, lastSpeechPosition + trailingPaddingSamples);
+  }
+
+  return samples.length; // Don't trim if uncertain
 }
 
 /**
- * Trim silence from the start (and optionally end) of an audio Blob.
- * Returns a new Blob with silence removed, preserving critical trailing audio.
+ * Main function: Trim silence from audio blob
+ * 
+ * Returns new blob with silence removed, plus metrics
  */
 export async function trimSilence(
   audioBlob: Blob,
   config: TrimConfig = {}
-): Promise<{ blob: Blob; trimmedLeadingMs: number; trimmedTrailingMs: number }> {
+): Promise<{ blob: Blob; trimmedLeadingMs: number; trimmedTrailingMs: number; originalDurationMs: number }> {
   const cfg: Required<TrimConfig> = { ...DEFAULT_CONFIG, ...config };
 
   try {
@@ -160,7 +217,7 @@ export async function trimSilence(
     const audioContext = new AudioContext();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-    // Get mono samples
+    // Convert to mono for analysis
     let samples: Float32Array;
     if (audioBuffer.numberOfChannels === 1) {
       samples = audioBuffer.getChannelData(0);
@@ -176,25 +233,29 @@ export async function trimSilence(
     const sampleRate = audioBuffer.sampleRate;
     const originalDurationMs = (samples.length / sampleRate) * 1000;
 
+    // Find trim points
     const speechStart = findSpeechStart(samples, sampleRate, cfg);
     const speechEnd = cfg.trimTrailing
       ? findSpeechEnd(samples, sampleRate, cfg)
       : samples.length;
 
-    // SAFETY CHECK: Ensure we don't trim below minimum duration
+    // SAFETY: Ensure minimum duration
     const minSamples = Math.floor(sampleRate * cfg.minAudioDuration);
-    const trimmedSamples = speechEnd - speechStart;
+    const proposedLength = speechEnd - speechStart;
 
-    if (trimmedSamples < minSamples) {
-      console.log(`[audioSilenceTrimmer] Would trim to ${(trimmedSamples / sampleRate).toFixed(2)}s, below minimum ${cfg.minAudioDuration}s - skipping trim`);
+    if (proposedLength < minSamples) {
+      console.log(
+        `[audioSilenceTrimmer] Would trim to ${(proposedLength / sampleRate).toFixed(2)}s, ` +
+        `below minimum ${cfg.minAudioDuration}s - skipping trim`
+      );
       await audioContext.close();
-      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
+      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0, originalDurationMs };
     }
 
     // No meaningful trim needed
     if (speechStart === 0 && speechEnd === samples.length) {
       await audioContext.close();
-      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
+      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0, originalDurationMs };
     }
 
     const trimmedLeadingMs = Math.round((speechStart / sampleRate) * 1000);
@@ -205,17 +266,18 @@ export async function trimSilence(
       `(${originalDurationMs.toFixed(0)}ms → ${((speechEnd - speechStart) / sampleRate * 1000).toFixed(0)}ms)`
     );
 
-    // Create new AudioBuffer with trimmed audio
+    // Create trimmed buffer
+    const trimmedLength = speechEnd - speechStart;
     const trimmedBuffer = audioContext.createBuffer(
       audioBuffer.numberOfChannels,
-      trimmedSamples,
+      trimmedLength,
       sampleRate
     );
 
     for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
       const original = audioBuffer.getChannelData(ch);
       const target = trimmedBuffer.getChannelData(ch);
-      for (let i = 0; i < trimmedSamples; i++) {
+      for (let i = 0; i < trimmedLength; i++) {
         target[i] = original[speechStart + i];
       }
     }
@@ -223,15 +285,15 @@ export async function trimSilence(
     const wavBlob = audioBufferToWav(trimmedBuffer);
     await audioContext.close();
 
-    return { blob: wavBlob, trimmedLeadingMs, trimmedTrailingMs };
+    return { blob: wavBlob, trimmedLeadingMs, trimmedTrailingMs, originalDurationMs };
   } catch (err) {
-    console.warn('[audioSilenceTrimmer] Failed to trim silence:', err);
-    return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
+    console.warn('[audioSilenceTrimmer] Trim failed, returning original:', err);
+    return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0, originalDurationMs: 0 };
   }
 }
 
 /**
- * Backwards-compatible helper: trims leading silence only.
+ * Backwards-compatible helper
  */
 export async function trimLeadingSilence(
   audioBlob: Blob,
@@ -245,7 +307,7 @@ export async function trimLeadingSilence(
 }
 
 /**
- * Convert an AudioBuffer to a WAV Blob.
+ * Convert AudioBuffer to WAV Blob
  */
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numChannels = buffer.numberOfChannels;

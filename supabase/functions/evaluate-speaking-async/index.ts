@@ -2,18 +2,12 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
- * Speaking Evaluation Job Creator (Queue-Based Architecture)
+ * Speaking Evaluation Job Creator v2.0
  * 
- * This function ONLY creates the job record and returns immediately.
- * Actual processing is done by process-speaking-job (separate function).
+ * CRITICAL CHANGE: Browser transcripts are NO LONGER accepted for evaluation.
+ * All transcription is done by Dual-Whisper engine in groq-speaking-transcribe.
  * 
- * NEW: Per-user concurrency limit (max 1 active job) to prevent rate limiting bursts.
- * 
- * Benefits:
- * - Instant response to user (no waiting)
- * - No edge function timeouts during AI processing
- * - Jobs can be retried independently
- * - Better error handling and visibility
+ * This ensures consistent, production-grade transcription quality.
  */
 
 const corsHeaders = {
@@ -22,35 +16,24 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Per-user concurrency limit
 const MAX_CONCURRENT_JOBS_PER_USER = 1;
 
 interface EvaluationRequest {
   testId: string;
-  // Optional for text-based (basic) evaluation; required for audio-based (accuracy) evaluation
-  filePaths?: Record<string, string>;
+  filePaths: Record<string, string>;
   durations?: Record<string, number>;
   topic?: string;
   difficulty?: string;
   fluencyFlag?: boolean;
   retryJobId?: string;
-  cancelExisting?: boolean; // If true, cancel existing jobs before creating new one
-  evaluationMode?: 'basic' | 'accuracy'; // 'basic' = text-based, 'accuracy' = audio-based
-  // Text-based evaluation data (from browser speech analysis)
-  transcripts?: Record<string, {
-    rawTranscript: string;
-    cleanedTranscript: string;
-    wordConfidences: Array<{ word: string; confidence: number; isFiller: boolean; isRepeat: boolean }>;
-    fluencyMetrics: { wordsPerMinute: number; pauseCount: number; fillerCount: number; fillerRatio: number; repetitionCount: number; overallFluencyScore: number };
-    prosodyMetrics: { pitchVariation: number; stressEventCount: number; rhythmConsistency: number };
-    durationMs: number;
-    overallClarityScore: number;
-  }>;
+  cancelExisting?: boolean;
+  // NOTE: transcripts parameter is IGNORED - browser transcripts are unreliable
+  // All transcription is done server-side by Dual-Whisper engine
 }
 
 serve(async (req) => {
   console.log(`[evaluate-speaking-async] Request at ${new Date().toISOString()}`);
-  
+
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -66,7 +49,7 @@ serve(async (req) => {
 
     const supabaseService = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Authenticate user
+    // Authenticate
     const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
     if (authError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -76,38 +59,9 @@ serve(async (req) => {
     }
 
     const body: EvaluationRequest = await req.json();
-    const {
-      testId,
-      filePaths,
-      durations,
-      topic,
-      difficulty,
-      fluencyFlag,
-      retryJobId,
-      cancelExisting,
-      transcripts,
-      evaluationMode,
-    } = body;
+    const { testId, filePaths, durations, topic, difficulty, fluencyFlag, retryJobId, cancelExisting } = body;
 
-    // =========================================================================
-    // PRODUCTION MODE: ALWAYS USE WHISPER (AUDIO-BASED) EVALUATION
-    // =========================================================================
-    // Browser transcripts are used ONLY for cross-validation, NOT for evaluation.
-    // This ensures consistent, high-quality transcription across all users.
-    // =========================================================================
-    const useAudioEvaluation = true; // ALWAYS use Whisper
-    const hasTranscripts = Boolean(transcripts) && Object.keys(transcripts || {}).length > 0;
-
-    const normalizedFilePaths: Record<string, string> =
-      filePaths && typeof filePaths === 'object' ? (filePaths as Record<string, string>) : {};
-
-    console.log(
-      `[evaluate-speaking-async] Mode: whisper-primary, hasTranscripts (for validation): ${hasTranscripts}, filePaths: ${Object.keys(normalizedFilePaths).length}`,
-    );
-
-    // Validation rules:
-    // - testId is always required
-    // - filePaths are required ONLY when we will do audio-based evaluation
+    // Validation
     if (!testId) {
       return new Response(JSON.stringify({ error: 'Missing testId' }), {
         status: 400,
@@ -115,28 +69,22 @@ serve(async (req) => {
       });
     }
 
-    const requiresAudioFiles = useAudioEvaluation || !hasTranscripts;
-    if (requiresAudioFiles && Object.keys(normalizedFilePaths).length === 0) {
-      return new Response(JSON.stringify({ error: 'Missing filePaths for audio evaluation' }), {
+    const normalizedFilePaths: Record<string, string> =
+      filePaths && typeof filePaths === 'object' ? filePaths : {};
+
+    if (Object.keys(normalizedFilePaths).length === 0) {
+      return new Response(JSON.stringify({ error: 'Missing filePaths - audio files required' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    if (hasTranscripts && !useAudioEvaluation) {
-      console.log(
-        `[evaluate-speaking-async] Text-based evaluation available with ${Object.keys(transcripts || {}).length} segments`,
-      );
-    } else if (useAudioEvaluation) {
-      console.log(`[evaluate-speaking-async] Audio-based evaluation requested (accuracy mode)`);
-    }
+    console.log(`[evaluate-speaking-async] Processing ${Object.keys(normalizedFilePaths).length} audio files (Dual-Whisper mode)`);
 
     let job: any;
 
-    // Handle retry case
     if (retryJobId) {
-      console.log(`[evaluate-speaking-async] Retry mode - reusing job ${retryJobId}`);
-      
+      // Handle retry
       const { data: existingJob, error: fetchError } = await supabaseService
         .from('speaking_evaluation_jobs')
         .select('*')
@@ -150,12 +98,11 @@ serve(async (req) => {
         });
       }
 
-      // Reset status to pending for processor to pick up
       await supabaseService
         .from('speaking_evaluation_jobs')
-        .update({ 
-          status: 'pending', 
-          stage: existingJob.google_file_uris ? 'pending_eval' : 'pending_upload',
+        .update({
+          status: 'pending',
+          stage: 'pending_transcription',
           updated_at: new Date().toISOString(),
           last_error: null,
           lock_token: null,
@@ -165,8 +112,7 @@ serve(async (req) => {
 
       job = existingJob;
     } else {
-      console.log(`[evaluate-speaking-async] Creating new job for test ${testId}, ${Object.keys(normalizedFilePaths).length} files`);
-
+      // Check concurrent limit
       const { data: activeJobs, error: activeError } = await supabaseService
         .from('speaking_evaluation_jobs')
         .select('id, status, stage, test_id, created_at')
@@ -180,12 +126,11 @@ serve(async (req) => {
 
       const currentActiveCount = activeJobs?.length || 0;
 
-      // If user has active jobs and cancelExisting is false, block submission
       if (currentActiveCount >= MAX_CONCURRENT_JOBS_PER_USER && !cancelExisting) {
         const activeJob = activeJobs?.[0];
-        return new Response(JSON.stringify({ 
+        return new Response(JSON.stringify({
           error: 'CONCURRENT_LIMIT',
-          message: `You already have an evaluation in progress. Please wait for it to complete or cancel it first.`,
+          message: 'You already have an evaluation in progress.',
           activeJobId: activeJob?.id,
           activeTestId: activeJob?.test_id,
           activeStatus: activeJob?.status,
@@ -195,7 +140,7 @@ serve(async (req) => {
         });
       }
 
-      // Cancel existing jobs if requested or if we need to make room
+      // Cancel existing jobs if requested
       if (activeJobs && activeJobs.length > 0) {
         console.log(`[evaluate-speaking-async] Cancelling ${activeJobs.length} existing jobs`);
         await supabaseService
@@ -203,7 +148,7 @@ serve(async (req) => {
           .update({
             status: 'failed',
             stage: 'cancelled',
-            last_error: 'Cancelled: User submitted a new evaluation request.',
+            last_error: 'Cancelled: New evaluation submitted',
             updated_at: new Date().toISOString(),
             lock_token: null,
             lock_expires_at: null,
@@ -212,54 +157,15 @@ serve(async (req) => {
           .in('status', ['pending', 'processing']);
       }
 
-      // Get current provider settings
-      const { data: providerSettings } = await supabaseService
-        .from('speaking_evaluation_settings')
-        .select('provider')
-        .limit(1)
-        .maybeSingle();
-      
-      const currentProvider = providerSettings?.provider || 'gemini';
-      
-      // Create new job record with staged processing
-      // - 'accuracy' mode: always use audio-based evaluation
-      // - 'basic' mode with transcripts: use text-based evaluation (pending_text_eval)
-      // - 'basic' mode without transcripts: fall back to audio evaluation
-      let stage: string;
-      
-      if (!useAudioEvaluation && hasTranscripts) {
-        // Text-based evaluation (same for both providers)
-        stage = 'pending_text_eval';
-      } else if (currentProvider === 'groq') {
-        // Groq audio evaluation starts with transcription
-        stage = 'pending_transcription';
-      } else {
-        // Gemini audio evaluation starts with upload
-        stage = 'pending_upload';
-      }
-      
-      console.log(`[evaluate-speaking-async] Creating job with provider: ${currentProvider}, stage: ${stage}`);
-      
-      // CRITICAL: ALWAYS store browser transcripts (if provided) as fallback for accuracy mode failures
-      // This enables text-based fallback when audio evaluation fails after retries
-      const partialResultsPayload: Record<string, any> = { evaluationMode };
-      
-      // Store transcripts in ALL modes for fallback capability
-      if (hasTranscripts) {
-        partialResultsPayload.browserTranscripts = transcripts; // Always save as fallback
-        if (!useAudioEvaluation) {
-          partialResultsPayload.transcripts = transcripts; // For text-based evaluation
-        }
-      }
-      
+      // Create new job - ALWAYS use Groq transcription (Dual-Whisper)
       const { data: newJob, error: jobError } = await supabaseService
         .from('speaking_evaluation_jobs')
         .insert({
           user_id: user.id,
           test_id: testId,
           status: 'pending',
-          stage,
-          provider: currentProvider, // Set provider for routing
+          stage: 'pending_transcription', // Always start with Dual-Whisper transcription
+          provider: 'groq',
           file_paths: normalizedFilePaths,
           durations: durations || {},
           topic,
@@ -267,7 +173,10 @@ serve(async (req) => {
           fluency_flag: fluencyFlag || false,
           max_retries: 5,
           retry_count: 0,
-          partial_results: partialResultsPayload,
+          partial_results: {
+            evaluationMode: 'dual-whisper',
+            pipelineVersion: '2.0',
+          },
         })
         .select()
         .single();
@@ -285,9 +194,8 @@ serve(async (req) => {
 
     console.log(`[evaluate-speaking-async] Job ${retryJobId ? 'retry' : 'created'}: ${job.id}`);
 
-    // Trigger the job runner (watchdog/dispatcher) which will handle staged processing
+    // Trigger transcription
     const runnerUrl = `${supabaseUrl}/functions/v1/speaking-job-runner`;
-    
     fetch(runnerUrl, {
       method: 'POST',
       headers: {
@@ -295,24 +203,20 @@ serve(async (req) => {
         'Authorization': `Bearer ${supabaseServiceKey}`,
       },
       body: JSON.stringify({ jobId: job.id }),
-    }).then(res => {
-      console.log(`[evaluate-speaking-async] Job runner triggered, status: ${res.status}`);
-    }).catch(err => {
-      console.error('[evaluate-speaking-async] Failed to trigger job runner:', err);
-    });
+    }).catch(console.error);
 
-    // Return immediately - user gets instant feedback
     return new Response(
       JSON.stringify({
         success: true,
         jobId: job.id,
         status: 'pending',
-        message: 'Evaluation submitted. You will be notified when results are ready.',
+        message: 'Evaluation submitted. Results will be ready soon.',
+        pipelineVersion: 'dual-whisper-2.0',
       }),
       {
         status: 202,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
+      }
     );
 
   } catch (error: any) {

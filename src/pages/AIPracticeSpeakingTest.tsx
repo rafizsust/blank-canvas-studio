@@ -1616,6 +1616,7 @@ function AIPracticeSpeakingTest() {
       }
       console.log('[AIPracticeSpeakingTest] === END TRANSCRIPTS ===');
       
+      // NOTE: Browser transcripts are NO LONGER sent to backend - Dual-Whisper is authoritative
       const { data, error } = await supabase.functions.invoke('evaluate-speaking-async', {
         body: {
           testId,
@@ -1624,11 +1625,8 @@ function AIPracticeSpeakingTest() {
           topic: test?.topic,
           difficulty: test?.difficulty,
           fluencyFlag,
-          cancelExisting: true, // Cancel any existing pending jobs to avoid 429
-          evaluationMode, // 'basic' (text-based) or 'accuracy' (audio-based)
-          // CRITICAL: ALWAYS include transcripts as fallback for accuracy mode failures
-          // Text-based evaluation can proceed if audio evaluation fails repeatedly
-          transcripts: Object.keys(transcriptData).length > 0 ? transcriptData : undefined,
+          cancelExisting: true,
+          // transcripts removed - Dual-Whisper engine handles all transcription server-side
         },
       });
 
