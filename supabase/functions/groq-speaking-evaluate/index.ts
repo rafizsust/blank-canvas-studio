@@ -29,14 +29,16 @@ const GROQ_LLM_URL = 'https://api.groq.com/openai/v1/chat/completions';
 // =============================================================================
 // GROQ LLM MODEL FALLBACK CHAIN (Speaking Evaluation)
 // =============================================================================
-// Primary: Qwen3 32B - 400 T/s, 300K TPM, excellent reasoning
+// Primary: GPT-OSS 120B - High quality reasoning
 // Fallback1: Llama 3.3 70B - 280 T/s, 300K TPM, very capable
-// Fallback2: Llama 3.1 8B - 560 T/s, 250K TPM, fast emergency fallback
+// Fallback2: Qwen3 32B - 400 T/s, 300K TPM, excellent reasoning
+// Fallback3: Llama 3.1 8B - 560 T/s, 250K TPM, fast emergency fallback
 // =============================================================================
 const GROQ_LLM_MODELS = [
-  'qwen/qwen3-32b',           // Primary: Fast, good reasoning, 300K TPM
+  'openai/gpt-oss-120b',      // Primary: High quality reasoning
   'llama-3.3-70b-versatile',  // Fallback1: Best quality, 300K TPM
-  'llama-3.1-8b-instant',     // Fallback2: Fast emergency, 250K TPM
+  'qwen/qwen3-32b',           // Fallback2: Fast, good reasoning, 300K TPM
+  'llama-3.1-8b-instant',     // Fallback3: Fast emergency, 250K TPM
 ];
 const GROQ_LLM_MODEL = GROQ_LLM_MODELS[0]; // Primary model for single-model calls
 

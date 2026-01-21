@@ -34,12 +34,12 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 // =============================================================================
 // GROQ STT MODEL FALLBACK CHAIN (Transcription)
 // =============================================================================
-// Primary: whisper-large-v3-turbo - 400K ASH, 400 RPM, fastest
-// Fallback: whisper-large-v3 - 200K ASH, 300 RPM, more accurate
+// Primary: whisper-large-v3 - 200K ASH, 300 RPM, more accurate
+// Fallback: whisper-large-v3-turbo - 400K ASH, 400 RPM, faster
 // =============================================================================
 const GROQ_STT_MODELS = [
-  'whisper-large-v3-turbo',  // Primary: Fast, 400K ASH limit
-  'whisper-large-v3',        // Fallback: More accurate, 200K ASH limit
+  'whisper-large-v3',        // Primary: More accurate, 200K ASH limit
+  'whisper-large-v3-turbo',  // Fallback: Fast, 400K ASH limit
 ];
 
 // Inter-segment delay (ms) - reduced from 3000ms since we typically have <12 segments
