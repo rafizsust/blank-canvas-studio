@@ -33,8 +33,8 @@ const EDGE_MAX_SESSION_MS = 45000;
 const RESTART_DELAY_MS = 200;
 // Watchdog check interval
 const WATCHDOG_INTERVAL_MS = 2000;
-// Grace period for late finals after stop
-const STOP_GRACE_PERIOD_MS = 200;
+// EXTENDED: Grace period for late finals after stop (increased from 200ms to 500ms)
+const STOP_GRACE_PERIOD_MS = 500;
 
 // Browser detection
 const detectBrowser = () => {
@@ -343,23 +343,39 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
     }
   }, [createRecognition, flushInterimToFinal]);
 
-  // Stop listening with grace period for late finals
+  // Stop listening with extended grace period for capturing final words
   const stopListening = useCallback(() => {
     console.log('[SpeechRecognition] Stopping...', {
       segmentCount: finalSegmentsRef.current.length,
       hasInterim: Boolean(latestInterimRef.current?.trim())
     });
-    
-    // Set manual stop flag to prevent restart, but keep recording flag true briefly
+
     isManualStopRef.current = true;
-    
+
     // Clear watchdog
     if (watchdogTimerRef.current) {
       clearInterval(watchdogTimerRef.current);
       watchdogTimerRef.current = null;
     }
-    
-    // Stop recognition - this triggers final results before onend
+
+    // =========================================================================
+    // CRITICAL: Capture any remaining interim text BEFORE stopping
+    // =========================================================================
+    // Browser Speech API often has the final word(s) in interim state
+    // when stop() is called. Flush these to final immediately.
+    // =========================================================================
+
+    if (latestInterimRef.current?.trim()) {
+      const trailingInterim = latestInterimRef.current.trim();
+      if (trailingInterim !== lastExactFinalRef.current) {
+        console.log('[SpeechRecognition] Capturing trailing interim before stop:', trailingInterim);
+        finalSegmentsRef.current.push(trailingInterim);
+        lastExactFinalRef.current = trailingInterim;
+      }
+      latestInterimRef.current = '';
+    }
+
+    // Stop recognition
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -367,22 +383,21 @@ export function useSpeechRecognition(config: SpeechRecognitionConfig = {}) {
         // Already stopped
       }
     }
-    
-    // Give browser grace period for late final results before final cleanup
-    // The onend handler will also flush, but this is a fallback
+
+    // EXTENDED grace period for late final results (500ms instead of 200ms)
     setTimeout(() => {
       isRecordingRef.current = false;
-      
-      // Flush any remaining interim that wasn't converted to final
+
+      // Second flush attempt for any very late results
       const flushed = flushInterimToFinal();
       if (flushed) {
-        console.log('[SpeechRecognition] Flushed remaining interim on stop');
+        console.log('[SpeechRecognition] Flushed late interim on stop');
       }
-      
+
       setInterimTranscript('');
       setIsListening(false);
       instanceCountRef.current = 0;
-      
+
       console.log('[SpeechRecognition] Stopped with', finalSegmentsRef.current.length, 'segments');
     }, STOP_GRACE_PERIOD_MS);
   }, [flushInterimToFinal]);

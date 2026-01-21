@@ -682,14 +682,19 @@ function AIPracticeSpeakingTest() {
         }
 
         console.log(`[SpeakingTest] Speech analysis for ${key}:`, {
-          rawTranscript: analysis.rawTranscript.slice(0, 100),
+          wordCount: analysis.rawTranscript?.split(/\s+/).length || 0,
           durationMs: analysis.durationMs,
+          browserMode: analysis.browserMode,
         });
 
-        // Persist analysis immediately so submission always includes transcripts
+        // Store browser transcript as VALIDATOR (not primary)
         setSegmentAnalyses((prev) => ({
           ...prev,
-          [key]: analysis,
+          [key]: {
+            ...analysis,
+            // Mark as validator only - Whisper is primary
+            isValidatorOnly: true,
+          },
         }));
       }).finally(() => {
         delete pendingTranscriptFinalizationsRef.current[key];
@@ -698,11 +703,25 @@ function AIPracticeSpeakingTest() {
       pendingTranscriptFinalizationsRef.current[key] = finalize;
     }
 
-    // Save after MediaRecorder flushes the final dataavailable event.
+    // CRITICAL: Store metadata for onstop handler
     pendingStopMetaRef.current = {
       key,
       meta,
       startMs: activeAudioStartRef.current,
+    };
+
+    // =========================================================================
+    // CRITICAL FIX: Flush MediaRecorder buffer before stopping
+    // =========================================================================
+    // Browser MediaRecorder keeps 50-150ms of audio in hardware buffers.
+    // Without requestData(), this trailing audio is DROPPED on stop().
+    // =========================================================================
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        audioChunksRef.current.push(e.data);
+        console.log(`[SpeakingTest] Audio chunk received: ${e.data.size} bytes`);
+      }
     };
 
     recorder.onstop = () => {
@@ -712,6 +731,8 @@ function AIPracticeSpeakingTest() {
 
         const duration = Math.max(0, (Date.now() - pending.startMs) / 1000);
         const chunks = [...audioChunksRef.current];
+
+        console.log(`[SpeakingTest] Final audio blob: ${chunks.reduce((acc, c) => acc + c.size, 0)} bytes for ${pending.key}`);
 
         const segmentData = {
           ...pending.meta,
@@ -730,7 +751,7 @@ function AIPracticeSpeakingTest() {
           saveAudioSegment(testId, segmentData).catch(err => {
             console.warn('[AIPracticeSpeakingTest] Failed to persist audio segment:', err);
           });
-          
+
           // Update test meta with latest progress
           updateTestMetaProgress(testId, segmentData.partNumber, segmentData.questionNumber - 1).catch(err => {
             console.warn('[AIPracticeSpeakingTest] Failed to update test meta progress:', err);
@@ -746,8 +767,19 @@ function AIPracticeSpeakingTest() {
     };
 
     if (recorder.state === 'recording') {
-      recorder.stop();
-      recorder.stream.getTracks().forEach((t) => t.stop());
+      // STEP 1: Request any buffered data (flushes hardware buffer)
+      console.log('[SpeakingTest] Flushing MediaRecorder buffer...');
+      recorder.requestData();
+
+      // STEP 2: Wait for buffer flush, then stop
+      // 100ms is sufficient for all browsers to flush their buffers
+      setTimeout(() => {
+        if (recorder.state === 'recording') {
+          recorder.stop();
+          recorder.stream.getTracks().forEach((t) => t.stop());
+          console.log('[SpeakingTest] MediaRecorder stopped after buffer flush');
+        }
+      }, 100);
     }
 
     setIsRecording(false);
