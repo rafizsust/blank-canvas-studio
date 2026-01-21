@@ -111,7 +111,7 @@ export default function AdminSettings() {
     id: undefined,
     provider: 'gemini',
     groq_stt_model: 'whisper-large-v3-turbo',
-    groq_llm_model: 'llama-3.3-70b-versatile',
+    groq_llm_model: 'qwen/qwen3-32b',  // Updated primary model
     gemini_model: 'gemini-2.5-flash',
     auto_fallback_enabled: true,
   });
@@ -181,7 +181,7 @@ export default function AdminSettings() {
           id: settingsData.id,
           provider: settingsData.provider as 'gemini' | 'groq',
           groq_stt_model: settingsData.groq_stt_model || 'whisper-large-v3-turbo',
-          groq_llm_model: settingsData.groq_llm_model || 'llama-3.3-70b-versatile',
+          groq_llm_model: settingsData.groq_llm_model || 'qwen/qwen3-32b',  // Updated default
           gemini_model: settingsData.gemini_model || 'gemini-2.5-flash',
           auto_fallback_enabled: settingsData.auto_fallback_enabled ?? true,
         });

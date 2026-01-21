@@ -60,13 +60,95 @@ async function decryptApiKey(encryptedValue: string, encryptionKey: string): Pro
 // =============================================================================
 // THE TUTOR - Answer Explanation Models (Split-Brain Architecture)
 // =============================================================================
-// Prioritize speed and high-quota models for instant explanations
-// These models have faster response times and higher daily quotas
-const GEMINI_MODELS = [
-  'gemini-2.0-flash-lite-preview-02-05', // 1. Primary: Instant speed, 1500 daily quota
-  'gemini-2.0-flash-lite',               // 2. Secondary: Stable Lite model
-  'gemini-2.0-flash',                    // 3. Fallback: Low latency standard
+// Prioritize Groq's fastest/cheapest models for instant explanations
+// These have very high quotas and fast response times
+// =============================================================================
+const GROQ_EXPLAIN_MODELS = [
+  'llama-3.1-8b-instant',     // Primary: 560 T/s, 250K TPM - fastest, cheapest
+  'openai/gpt-oss-20b',       // Fallback: 1000 T/s, 250K TPM - very fast
 ];
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+// Gemini fallback models (if Groq fails entirely)
+const GEMINI_MODELS = [
+  'gemini-2.0-flash-lite-preview-02-05', // Fast Gemini fallback
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+];
+
+async function callGroqExplain(
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  serviceClient?: any
+): Promise<string | null> {
+  for (const model of GROQ_EXPLAIN_MODELS) {
+    const startTime = Date.now();
+    try {
+      console.log(`[explain-answer] Trying Groq model: ${model}`);
+      const response = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.7,
+          max_tokens: 2048,
+        }),
+      });
+
+      const responseTimeMs = Date.now() - startTime;
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[explain-answer] Groq ${model} failed with status ${response.status}`);
+        
+        const isQuota = response.status === 429;
+        if (serviceClient) {
+          await logModelPerformance(
+            serviceClient, 
+            model, 
+            isQuota ? 'quota_exceeded' : 'error',
+            responseTimeMs,
+            errorText.slice(0, 200)
+          );
+        }
+        continue;
+      }
+
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content;
+      if (text) {
+        if (serviceClient) {
+          await logModelPerformance(serviceClient, model, 'success', responseTimeMs);
+        }
+        console.log(`[explain-answer] Success with Groq ${model} in ${responseTimeMs}ms`);
+        return text;
+      }
+    } catch (err) {
+      const responseTimeMs = Date.now() - startTime;
+      console.error(`[explain-answer] Error with ${model}:`, err);
+      if (serviceClient) {
+        await logModelPerformance(
+          serviceClient, 
+          model, 
+          'error',
+          responseTimeMs,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+      continue;
+    }
+  }
+  return null;
+}
 
 async function callGemini(
   apiKey: string, 
@@ -77,7 +159,7 @@ async function callGemini(
   for (const model of GEMINI_MODELS) {
     const startTime = Date.now();
     try {
-      console.log(`Trying Gemini model: ${model}`);
+      console.log(`[explain-answer] Trying Gemini model: ${model}`);
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
@@ -99,14 +181,12 @@ async function callGemini(
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`Gemini ${model} failed with status ${response.status}`);
+        console.error(`[explain-answer] Gemini ${model} failed with status ${response.status}`);
         
-        // Determine if quota error
         const isQuota = response.status === 429 || 
           errorText.toLowerCase().includes('quota') || 
           errorText.toLowerCase().includes('resource_exhausted');
         
-        // Log the error
         if (serviceClient) {
           await logModelPerformance(
             serviceClient, 
@@ -122,7 +202,6 @@ async function callGemini(
       const data = await response.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text) {
-        // Log success
         if (serviceClient) {
           await logModelPerformance(serviceClient, model, 'success', responseTimeMs);
         }
@@ -130,7 +209,7 @@ async function callGemini(
       }
     } catch (err) {
       const responseTimeMs = Date.now() - startTime;
-      console.error(`Error with ${model}:`, err);
+      console.error(`[explain-answer] Error with ${model}:`, err);
       if (serviceClient) {
         await logModelPerformance(
           serviceClient, 
@@ -151,7 +230,7 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Create service client for logging (bypasses RLS)
+  // Create service client for logging and Groq key access (bypasses RLS)
   const serviceClient = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -173,31 +252,6 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-
-    // Get user's Gemini API key
-    const { data: secretData, error: secretError } = await supabaseClient
-      .from('user_secrets')
-      .select('encrypted_value')
-      .eq('user_id', user.id)
-      .eq('secret_name', 'GEMINI_API_KEY')
-      .single();
-
-    if (secretError || !secretData) {
-      return new Response(JSON.stringify({ 
-        error: 'Gemini API key not found. Please set it in Settings.',
-        code: 'API_KEY_NOT_FOUND'
-      }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const appEncryptionKey = Deno.env.get('app_encryption_key');
-    if (!appEncryptionKey) {
-      throw new Error('Encryption key not configured');
-    }
-
-    const geminiApiKey = await decryptApiKey(secretData.encrypted_value, appEncryptionKey);
 
     const { 
       questionText, 
@@ -290,7 +344,7 @@ Correct Answer: ${correctAnswer}
 
 Please explain ${isCorrect ? 'why this answer is correct and what concept it demonstrates' : 'why the student\'s answer is wrong and why the correct answer is right'}. ${contextReference} Also, if you notice any issues with the provided correct answer, please mention that the user should report this issue to the admin.`;
 
-    console.log("Generating explanation with Gemini:", {
+    console.log("[explain-answer] Generating explanation:", {
       questionType,
       testType,
       hasOptions: !!optionsText,
@@ -299,10 +353,55 @@ Please explain ${isCorrect ? 'why this answer is correct and what concept it dem
       isCorrect
     });
 
-    const explanation = await callGemini(geminiApiKey, systemPrompt, userPrompt, serviceClient);
+    // Strategy: Try Groq with system keys first (fast, high quota), then fall back to user's Gemini
+    let explanation: string | null = null;
+    
+    // 1. Try Groq with system API keys (preferred - fast & high quota)
+    const { data: groqKeyData } = await serviceClient
+      .from('api_keys')
+      .select('key_value')
+      .eq('provider', 'groq')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    
+    if (groqKeyData?.key_value) {
+      console.log("[explain-answer] Trying Groq with system key...");
+      explanation = await callGroqExplain(groqKeyData.key_value, systemPrompt, userPrompt, serviceClient);
+    }
+    
+    // 2. Fall back to user's Gemini key if Groq failed
+    if (!explanation) {
+      console.log("[explain-answer] Groq failed/unavailable, trying user Gemini key...");
+      
+      const { data: secretData, error: secretError } = await supabaseClient
+        .from('user_secrets')
+        .select('encrypted_value')
+        .eq('user_id', user.id)
+        .eq('secret_name', 'GEMINI_API_KEY')
+        .single();
+
+      if (secretError || !secretData) {
+        return new Response(JSON.stringify({ 
+          error: 'No API keys available. Groq quota may be exhausted and no user Gemini key found.',
+          code: 'API_KEY_NOT_FOUND'
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const appEncryptionKey = Deno.env.get('app_encryption_key');
+      if (!appEncryptionKey) {
+        throw new Error('Encryption key not configured');
+      }
+
+      const geminiApiKey = await decryptApiKey(secretData.encrypted_value, appEncryptionKey);
+      explanation = await callGemini(geminiApiKey, systemPrompt, userPrompt, serviceClient);
+    }
     
     if (!explanation) {
-      throw new Error('Failed to generate explanation');
+      throw new Error('Failed to generate explanation from all providers');
     }
 
     return new Response(
@@ -310,7 +409,7 @@ Please explain ${isCorrect ? 'why this answer is correct and what concept it dem
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Error in explain-answer function:", error);
+    console.error("[explain-answer] Error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

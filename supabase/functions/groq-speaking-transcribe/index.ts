@@ -31,6 +31,17 @@ const corsHeaders = {
 // Groq API endpoint
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
+// =============================================================================
+// GROQ STT MODEL FALLBACK CHAIN (Transcription)
+// =============================================================================
+// Primary: whisper-large-v3-turbo - 400K ASH, 400 RPM, fastest
+// Fallback: whisper-large-v3 - 200K ASH, 300 RPM, more accurate
+// =============================================================================
+const GROQ_STT_MODELS = [
+  'whisper-large-v3-turbo',  // Primary: Fast, 400K ASH limit
+  'whisper-large-v3',        // Fallback: More accurate, 200K ASH limit
+];
+
 // Inter-segment delay (ms) - reduced from 3000ms since we typically have <12 segments
 // and Groq free tier allows 20 RPM. 1 second delay = 60 req/min max, well under limit.
 const INTER_SEGMENT_DELAY_MS = 1000;
@@ -541,46 +552,73 @@ async function transcribeWithWhisper(
   // Prepare form data for Whisper API
   // IMPORTANT: Use proper file extension based on blob type for better Groq handling
   const fileExtension = audioBlob.type.includes('mpeg') || audioBlob.type.includes('mp3') ? 'mp3' : 'webm';
-  const formData = new FormData();
-  formData.append('file', audioBlob, `audio.${fileExtension}`);
   
-  // Use whisper-large-v3-turbo - recommended replacement after distil-whisper deprecation
-  // Offers good balance of speed and accuracy with free tier support
-  formData.append('model', 'whisper-large-v3-turbo');
-  formData.append('response_format', 'verbose_json');
-  formData.append('timestamp_granularities[]', 'word');
-  formData.append('timestamp_granularities[]', 'segment');
-  formData.append('language', 'en');
-  formData.append('temperature', '0');  // Reduce randomness to minimize hallucinations
+  // Try each STT model in the fallback chain
+  let result: WhisperResponse | null = null;
+  let usedModel: string | null = null;
   
-  // MINIMAL prompt to avoid Whisper echoing it back into transcripts.
-  // We rely on post-processing to strip artifacts instead of injecting context.
-  formData.append('prompt', 
-    'Transcribe exactly what is spoken. ' +
-    'Include filler words: um, uh, like, you know. ' +
-    'Silence produces no text. ' +
-    'Speech unclear: [INAUDIBLE].'
-  );
+  for (const sttModel of GROQ_STT_MODELS) {
+    console.log(`[groq-speaking-transcribe] Trying STT model: ${sttModel}`);
+    
+    const formData = new FormData();
+    formData.append('file', audioBlob, `audio.${fileExtension}`);
+    formData.append('model', sttModel);
+    formData.append('response_format', 'verbose_json');
+    formData.append('timestamp_granularities[]', 'word');
+    formData.append('timestamp_granularities[]', 'segment');
+    formData.append('language', 'en');
+    formData.append('temperature', '0');  // Reduce randomness to minimize hallucinations
+  
+    // MINIMAL prompt to avoid Whisper echoing it back into transcripts.
+    formData.append('prompt', 
+      'Transcribe exactly what is spoken. ' +
+      'Include filler words: um, uh, like, you know. ' +
+      'Silence produces no text. ' +
+      'Speech unclear: [INAUDIBLE].'
+    );
 
-  const response = await fetch(GROQ_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: formData,
-  });
+    try {
+      const response = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: formData,
+      });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[groq-speaking-transcribe] Whisper API error: ${response.status} - ${errorText}`);
-    throw new Error(`Whisper API error: ${response.status} - ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn(`[groq-speaking-transcribe] Model ${sttModel} failed: ${response.status} - ${errorText}`);
+        
+        // Rate limit - try next model
+        if (response.status === 429) {
+          console.log(`[groq-speaking-transcribe] Model ${sttModel} rate limited, trying next...`);
+          continue;
+        }
+        
+        // Other errors - try next model
+        continue;
+      }
+
+      result = await response.json();
+      usedModel = sttModel;
+      console.log(`[groq-speaking-transcribe] Success with model ${sttModel}`);
+      break;
+    } catch (err) {
+      console.warn(`[groq-speaking-transcribe] Model ${sttModel} error:`, err);
+      continue;
+    }
+  }
+  
+  if (!result) {
+    console.error(`[groq-speaking-transcribe] All STT models failed for ${segmentKey}`);
+    throw new Error(`Whisper API error: All STT models failed`);
   }
 
-  const result: WhisperResponse = await response.json();
   const processingTime = Date.now() - startTime;
   const shortAudioDuration = typeof result.duration === 'number' ? result.duration : 0;
 
-  console.log(`[groq-speaking-transcribe] ${segmentKey} transcribed in ${processingTime}ms, ${shortAudioDuration.toFixed(1)}s audio`);
+  console.log(`[groq-speaking-transcribe] ${segmentKey} transcribed with ${usedModel} in ${processingTime}ms, ${shortAudioDuration.toFixed(1)}s audio`);
 
   // CRITICAL: If audio duration is essentially zero (<0.5s), return empty transcript
   // Whisper hallucinates garbage on silent/empty audio files
@@ -609,42 +647,34 @@ async function transcribeWithWhisper(
     : 0;
 
   // Filter out segments with high no_speech probability, high compression ratio, or hallucination patterns
-  // Also apply DYNAMIC threshold for 2-5s silences (more aggressive filtering)
   const filteredSegments = result.segments?.filter(s => {
     const segmentDuration = (s.end || 0) - (s.start || 0);
 
-    // Some Whisper providers omit these fields; treat missing values conservatively.
     const noSpeechProb = typeof s.no_speech_prob === 'number' ? s.no_speech_prob : 0;
     const compressionRatio = typeof s.compression_ratio === 'number' ? s.compression_ratio : 0;
     
     // Dynamic no_speech threshold based on segment duration
-    // For 2-5 second segments, use stricter threshold to catch more hallucinations
     let noSpeechThreshold = NO_SPEECH_THRESHOLD;
     if (segmentDuration >= 2 && segmentDuration <= 5) {
-      noSpeechThreshold = 0.35; // More strict for 2-5s gaps
+      noSpeechThreshold = 0.35;
       console.log(`[groq-speaking-transcribe] Using strict no_speech threshold (0.35) for ${segmentDuration.toFixed(1)}s segment`);
     }
     
-    // Filter by no_speech probability
     if (noSpeechProb > noSpeechThreshold) {
       console.log(`[groq-speaking-transcribe] Filtering segment (no_speech=${noSpeechProb.toFixed(2)}, threshold=${noSpeechThreshold}): "${s.text}"`);
       return false;
     }
     
-    // Filter by compression ratio (hallucinations often have high compression)
     if (compressionRatio > COMPRESSION_RATIO_THRESHOLD) {
       console.log(`[groq-speaking-transcribe] Filtering segment (compression=${compressionRatio.toFixed(2)}): "${s.text}"`);
       return false;
     }
     
-    // Filter by hallucination patterns (non-English, known artifacts)
     if (containsHallucinationPatterns(s.text)) {
       console.log(`[groq-speaking-transcribe] Filtering segment (hallucination pattern): "${s.text}"`);
       return false;
     }
     
-    // Additional check: very short text in longer segments is suspicious
-    // BUT only if no_speech_prob is also elevated (to avoid false positives)
     const wordCount = (s.text?.split(/\s+/) || []).length;
     if (segmentDuration > 3 && wordCount <= 2 && noSpeechProb > 0.3) {
       console.log(`[groq-speaking-transcribe] Filtering suspicious short segment (${wordCount}w in ${segmentDuration.toFixed(1)}s, no_speech=${noSpeechProb.toFixed(2)}): "${s.text}"`);
@@ -657,70 +687,42 @@ async function transcribeWithWhisper(
   // Rebuild text from filtered segments
   const filteredText = filteredSegments.map(s => s.text).join(' ').trim();
 
-  // Filter out common hallucination phrases at START and END of audio
+  // Filter out common hallucination phrases
   let cleanedText = filteredText;
   
-  // Strip leading hallucinations first (e.g., "IELTS speaking test interview.")
   for (const pattern of HALLUCINATION_START_PHRASES) {
     cleanedText = cleanedText.replace(pattern, '');
   }
   
-  // Strip trailing hallucinations
   for (const pattern of HALLUCINATION_END_PHRASES) {
     cleanedText = cleanedText.replace(pattern, '');
   }
   cleanedText = cleanedText.trim();
 
-  // If the filtered text is empty or significantly different, log it
   if (cleanedText !== result.text.trim()) {
     console.log(`[groq-speaking-transcribe] Cleaned transcript: "${result.text}" -> "${cleanedText}"`);
   }
 
   // Extract all words from filtered segments
-  // NOTE: Some providers/models do not return word-level timestamps/probabilities
-  // inside segments (or at all). Our previous implementation rebuilt the final
-  // transcript ONLY from `words`, which caused EMPTY transcripts when `words`
-  // is missing.
   let words: WhisperWord[] = filteredSegments.flatMap(s => Array.isArray(s.words) ? s.words : []);
 
-  // Fallback: Some implementations may return words at the root level.
   if (words.length === 0 && Array.isArray((result as any).words)) {
     words = (result as any).words as WhisperWord[];
   }
 
-  // ============================================================================
-  // BULLETPROOF WORD FILTERING
-  // ============================================================================
-  // CRITICAL: Groq does NOT return word.probability scores (they're all undefined/0).
-  // We ONLY filter:
-  // 1. Known hallucination words (subscribe, goodbye, etc.)
-  // 2. Words extending beyond audio duration
-  // We DO NOT filter based on confidence/probability (it's not available)
-  // ============================================================================
-  
-  // Apply known hallucination word filter (NOT probability-based)
+  // Apply known hallucination word filter
   words = filterKnownHallucinationWords(words);
 
-  // Log original vs filtered word count
   const originalWordCount = filteredSegments.reduce((sum, s) => sum + (s.words?.length || 0), 0);
   if (words.length < originalWordCount) {
     console.log(`[groq-speaking-transcribe] Filtered ${originalWordCount - words.length} hallucination words`);
   }
 
-  // ============================================================================
-  // FINAL TRANSCRIPT TEXT (NEVER EMPTY DUE TO MISSING WORD TIMESTAMPS)
-  // ============================================================================
-  // Prefer word-derived text when available (enables trailing hallucination removal).
-  // Otherwise, fall back to the cleaned segment text.
-
   const audioDuration = result.duration || 0;
-
-  // Base text derived from segment text filtering (works even without word timestamps)
   const baseText = (cleanedText || filteredText || result.text || '').trim();
 
   let finalTextFromWords = '';
   if (words.length > 0) {
-    // Apply duration-based trailing hallucination filter
     const wordsBeforeTrailingFilter = words.length;
     words = filterTrailingHallucinationsByDuration(words, audioDuration);
     
@@ -728,7 +730,6 @@ async function transcribeWithWhisper(
       console.log(`[groq-speaking-transcribe] Duration filter removed ${wordsBeforeTrailingFilter - words.length} trailing words`);
     }
 
-    // Apply sentence-level trailing hallucination detection
     finalTextFromWords = words.map(w => w.word).join(' ').trim();
     const sentenceFilterResult = filterTrailingSentenceHallucinations(finalTextFromWords, words, audioDuration);
     words = sentenceFilterResult.words;
@@ -736,10 +737,8 @@ async function transcribeWithWhisper(
     finalTextFromWords = String(finalTextFromWords || '').trim();
   }
 
-  // Choose final text, ensuring we NEVER drop to empty just because word timestamps are missing
   let finalText = (finalTextFromWords || baseText).trim();
 
-  // Final cleanup: apply phrase-based filters to the final text
   for (const pattern of HALLUCINATION_START_PHRASES) {
     finalText = finalText.replace(pattern, '');
   }
@@ -748,35 +747,27 @@ async function transcribeWithWhisper(
   }
   finalText = finalText.trim();
 
-  // Safety: if aggressive filtering ever produces empty, fall back to baseText
   if (!finalText && baseText) {
     finalText = baseText;
   }
 
-  // Log final result comparison
   if (finalText !== result.text.trim()) {
     console.log(`[groq-speaking-transcribe] Final cleaned transcript: "${result.text}" -> "${finalText}"`);
   }
 
-  // Calculate average logprob from filtered segments
   const avgLogprob = filteredSegments.length > 0
     ? filteredSegments.reduce((sum, s) => sum + (s.avg_logprob || 0), 0) / filteredSegments.length
     : 0;
 
-  // Calculate average confidence (word-level if available)
-  // NOTE: Groq doesn't provide word probabilities, so this will be 0
   const avgConfidence = words.length > 0
     ? words.reduce((sum, w) => sum + (w.probability || 0), 0) / words.length
     : 0;
 
-  // Detect filler words
   const fillerPattern = /\b(um|uh|ah|er|hmm|like|you know|i mean|sort of|kind of)\b/gi;
   const fillerMatches = finalText.match(fillerPattern) || [];
   const fillerWords = [...new Set(fillerMatches.map(f => f.toLowerCase()))];
 
-  // Detect long pauses (gaps > 2 seconds between words)
   const longPauses: { start: number; end: number; duration: number }[] = [];
-  // Only possible when we have timestamped words
   if (words.length > 1) {
     for (let i = 1; i < words.length; i++) {
       const gap = words[i].start - words[i - 1].end;
@@ -790,7 +781,6 @@ async function transcribeWithWhisper(
     }
   }
 
-  // Log pause information for evaluation
   if (longPauses.length > 0) {
     console.log(`[groq-speaking-transcribe] ${segmentKey} has ${longPauses.length} long pauses (>2s): ${longPauses.map(p => `${p.duration.toFixed(1)}s`).join(', ')}`);
   }
@@ -807,7 +797,6 @@ async function transcribeWithWhisper(
     avgLogprob,
     fillerWords,
     longPauses,
-    // IMPORTANT: If word timestamps are missing, fall back to text-based word counting.
     wordCount: words.length > 0
       ? words.length
       : (finalText ? finalText.trim().split(/\s+/).filter(Boolean).length : 0),
