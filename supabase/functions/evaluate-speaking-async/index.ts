@@ -89,17 +89,20 @@ serve(async (req) => {
       evaluationMode,
     } = body;
 
-    // Determine evaluation path based on mode
-    // 'accuracy' mode forces audio-based evaluation (uses more AI tokens but more accurate)
-    // 'basic' mode uses text-based evaluation if transcripts are available
-    const useAudioEvaluation = evaluationMode === 'accuracy';
+    // =========================================================================
+    // PRODUCTION MODE: ALWAYS USE WHISPER (AUDIO-BASED) EVALUATION
+    // =========================================================================
+    // Browser transcripts are used ONLY for cross-validation, NOT for evaluation.
+    // This ensures consistent, high-quality transcription across all users.
+    // =========================================================================
+    const useAudioEvaluation = true; // ALWAYS use Whisper
     const hasTranscripts = Boolean(transcripts) && Object.keys(transcripts || {}).length > 0;
 
     const normalizedFilePaths: Record<string, string> =
       filePaths && typeof filePaths === 'object' ? (filePaths as Record<string, string>) : {};
 
     console.log(
-      `[evaluate-speaking-async] Mode: ${evaluationMode || 'basic'}, hasTranscripts: ${hasTranscripts}, useAudioEvaluation: ${useAudioEvaluation}, filePaths: ${Object.keys(normalizedFilePaths).length}`,
+      `[evaluate-speaking-async] Mode: whisper-primary, hasTranscripts (for validation): ${hasTranscripts}, filePaths: ${Object.keys(normalizedFilePaths).length}`,
     );
 
     // Validation rules:

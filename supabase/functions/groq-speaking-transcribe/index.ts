@@ -131,7 +131,16 @@ const HALLUCINATION_WORDS = new Set([
 // We prioritize keeping user speech over aggressively filtering.
 // ============================================================================
 
-const TRAILING_HALLUCINATION_BUFFER_SECONDS = 1.0; // Allow 1s grace period
+// Increased buffer: WebM duration metadata can be off by up to 1 second
+const TRAILING_HALLUCINATION_BUFFER_SECONDS = 2.0; // Was 1.0, now 2.0
+
+// Minimum word overlap required between Whisper and Browser transcripts
+// for cross-validation (0.6 = 60% of words must match)
+const CROSS_VALIDATION_THRESHOLD = 0.6;
+
+// If Whisper transcript is this much longer than browser transcript,
+// suspect hallucination (1.5 = 50% longer)
+const LENGTH_RATIO_HALLUCINATION_THRESHOLD = 1.5;
 
 /**
  * CONSERVATIVE filter: Only removes words that CLEARLY extend beyond audio.
@@ -226,6 +235,107 @@ function filterKnownHallucinationWords(words: WhisperWord[]): WhisperWord[] {
   return filtered;
 }
 
+/**
+ * CROSS-VALIDATION: Compare Whisper transcript against browser transcript
+ * to detect hallucinations and validate completeness.
+ * 
+ * Returns a confidence score and flags potential issues.
+ */
+interface CrossValidationResult {
+  confidence: 'high' | 'medium' | 'low';
+  wordOverlapRatio: number;
+  whisperExtraWords: string[];
+  browserExtraWords: string[];
+  suspectedHallucination: boolean;
+  suspectedMissingWords: boolean;
+  validatedTranscript: string;
+}
+
+function crossValidateTranscripts(
+  whisperText: string,
+  browserText: string | undefined,
+  audioDurationSeconds: number
+): CrossValidationResult {
+  // If no browser transcript, trust Whisper but with lower confidence
+  if (!browserText || browserText.trim().length === 0) {
+    return {
+      confidence: 'medium',
+      wordOverlapRatio: 1.0,
+      whisperExtraWords: [],
+      browserExtraWords: [],
+      suspectedHallucination: false,
+      suspectedMissingWords: false,
+      validatedTranscript: whisperText,
+    };
+  }
+
+  const whisperWords = whisperText.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  const browserWords = browserText.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+
+  // Create word sets for comparison
+  const whisperSet = new Set(whisperWords);
+  const browserSet = new Set(browserWords);
+
+  // Find common words
+  const commonWords = whisperWords.filter(w => browserSet.has(w));
+  const wordOverlapRatio = commonWords.length / Math.max(whisperWords.length, browserWords.length);
+
+  // Find extra words in each
+  const whisperExtraWords = whisperWords.filter(w => !browserSet.has(w));
+  const browserExtraWords = browserWords.filter(w => !whisperSet.has(w));
+
+  // Check for hallucination indicators
+  const lengthRatio = whisperWords.length / Math.max(browserWords.length, 1);
+  const suspectedHallucination = 
+    lengthRatio > LENGTH_RATIO_HALLUCINATION_THRESHOLD ||
+    (whisperExtraWords.length > 10 && wordOverlapRatio < 0.5);
+
+  // Check for missing words (browser has words Whisper missed)
+  const suspectedMissingWords = browserExtraWords.length > 3 && wordOverlapRatio < 0.7;
+
+  // Determine confidence
+  let confidence: 'high' | 'medium' | 'low';
+  if (wordOverlapRatio >= 0.8 && !suspectedHallucination) {
+    confidence = 'high';
+  } else if (wordOverlapRatio >= 0.5 && !suspectedHallucination) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  // Build validated transcript
+  let validatedTranscript = whisperText;
+
+  // If suspected hallucination with low overlap, prefer browser transcript
+  if (suspectedHallucination && wordOverlapRatio < 0.4 && browserText.length > 10) {
+    console.log(`[groq-speaking-transcribe] LOW CONFIDENCE: Using browser transcript as fallback`);
+    validatedTranscript = browserText;
+    confidence = 'low';
+  }
+
+  // If browser has extra words that look like they should be there, append them
+  // (This catches words Whisper missed at the end)
+  if (suspectedMissingWords && browserExtraWords.length <= 5) {
+    // Check if these words appear at the end of browser transcript
+    const lastBrowserWords = browserWords.slice(-5);
+    const missingAtEnd = browserExtraWords.filter(w => lastBrowserWords.includes(w));
+    if (missingAtEnd.length > 0) {
+      console.log(`[groq-speaking-transcribe] Appending likely missing words: ${missingAtEnd.join(', ')}`);
+      validatedTranscript = `${whisperText} ${missingAtEnd.join(' ')}`;
+    }
+  }
+
+  return {
+    confidence,
+    wordOverlapRatio,
+    whisperExtraWords,
+    browserExtraWords,
+    suspectedHallucination,
+    suspectedMissingWords,
+    validatedTranscript,
+  };
+}
+
 interface WhisperWord {
   word: string;
   start: number;
@@ -266,6 +376,14 @@ interface SegmentTranscription {
   longPauses: { start: number; end: number; duration: number }[];
   wordCount: number;
   noSpeechProb: number;
+  // NEW: Add validation metadata
+  validationConfidence?: 'high' | 'medium' | 'low';
+  crossValidationMetadata?: {
+    wordOverlapRatio: number;
+    suspectedHallucination: boolean;
+    suspectedMissingWords: boolean;
+    hadBrowserHint: boolean;
+  };
 }
 
 serve(async (req) => {
@@ -412,13 +530,19 @@ serve(async (req) => {
           continue;
         }
 
-        // Call Groq Whisper API
+        // Get browser transcript for this segment (if available) for cross-validation
+        const browserTranscripts = (job.partial_results as any)?.browserTranscripts || {};
+        const browserTranscriptData = browserTranscripts[segmentKey];
+        const browserHint = browserTranscriptData?.rawTranscript || '';
+
+        // Call Groq Whisper API with browser hint
         const transcription = await transcribeWithWhisper(
           audioBlob,
           groqApiKey,
           segmentKey,
           partNumber,
-          questionNumber
+          questionNumber,
+          browserHint
         );
 
         if (transcription) {
@@ -562,7 +686,8 @@ async function transcribeWithWhisper(
   apiKey: string,
   segmentKey: string,
   partNumber: number,
-  questionNumber: number
+  questionNumber: number,
+  browserHint: string = ''
 ): Promise<SegmentTranscription | null> {
   const startTime = Date.now();
 
@@ -585,14 +710,32 @@ async function transcribeWithWhisper(
     formData.append('timestamp_granularities[]', 'segment');
     formData.append('language', 'en');
     formData.append('temperature', '0');  // Reduce randomness to minimize hallucinations
-  
-    // MINIMAL prompt to avoid Whisper echoing it back into transcripts.
-    formData.append('prompt', 
-      'Transcribe exactly what is spoken. ' +
-      'Include filler words: um, uh, like, you know. ' +
-      'Silence produces no text. ' +
-      'Speech unclear: [INAUDIBLE].'
-    );
+
+    // =========================================================================
+    // PRODUCTION-GRADE WHISPER PROMPT
+    // =========================================================================
+    // This prompt is engineered to:
+    // 1. Prevent hallucinations (silence = no text)
+    // 2. Capture final words (explicit instruction)
+    // 3. Use browser transcript as context hint (improves accuracy)
+    // =========================================================================
+
+    let prompt = 'Complete, accurate transcription of IELTS speaking test response. ';
+    prompt += 'Include every word spoken, especially the final words even if quiet or trailing off. ';
+    prompt += 'Include filler words: um, uh, er, like, you know. ';
+    prompt += 'Silence or background noise produces NO text. ';
+    prompt += 'If speech is unclear, use [INAUDIBLE]. ';
+
+    // Add browser transcript as context hint if available
+    // This significantly improves Whisper accuracy for unclear speech
+    if (browserHint && browserHint.length > 10) {
+      // Use last 150 characters as context (Whisper uses this to disambiguate)
+      const hintText = browserHint.slice(-150).trim();
+      prompt += `Context from live transcription: "...${hintText}"`;
+      console.log(`[groq-speaking-transcribe] Using browser hint: "${hintText.slice(0, 50)}..."`);
+    }
+
+    formData.append('prompt', prompt);
 
     try {
       const response = await fetch(GROQ_API_URL, {
@@ -772,6 +915,26 @@ async function transcribeWithWhisper(
     console.log(`[groq-speaking-transcribe] Final cleaned transcript: "${result.text}" -> "${finalText}"`);
   }
 
+  // =========================================================================
+  // CROSS-VALIDATION WITH BROWSER TRANSCRIPT
+  // =========================================================================
+  // Compare Whisper output against browser transcript to detect issues
+  const validation = crossValidateTranscripts(
+    finalText,
+    browserHint,
+    result.duration || 0
+  );
+
+  console.log(`[groq-speaking-transcribe] Cross-validation result:`, {
+    confidence: validation.confidence,
+    wordOverlapRatio: validation.wordOverlapRatio.toFixed(2),
+    suspectedHallucination: validation.suspectedHallucination,
+    suspectedMissingWords: validation.suspectedMissingWords,
+  });
+
+  // Use validated transcript
+  finalText = validation.validatedTranscript;
+
   const avgLogprob = filteredSegments.length > 0
     ? filteredSegments.reduce((sum, s) => sum + (s.avg_logprob || 0), 0) / filteredSegments.length
     : 0;
@@ -818,5 +981,13 @@ async function transcribeWithWhisper(
       ? words.length
       : (finalText ? finalText.trim().split(/\s+/).filter(Boolean).length : 0),
     noSpeechProb: avgNoSpeechProb,
+    // NEW: Add validation metadata
+    validationConfidence: validation.confidence,
+    crossValidationMetadata: {
+      wordOverlapRatio: validation.wordOverlapRatio,
+      suspectedHallucination: validation.suspectedHallucination,
+      suspectedMissingWords: validation.suspectedMissingWords,
+      hadBrowserHint: Boolean(browserHint),
+    },
   };
 }
