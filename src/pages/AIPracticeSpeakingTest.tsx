@@ -45,7 +45,7 @@ import { cn } from '@/lib/utils';
 import { AudioLevelIndicator, AudioVolumeControl, AudioWaveformIndicator, SpeakingStateRestoreDialog } from '@/components/speaking';
 import { useFullscreenTest } from '@/hooks/useFullscreenTest';
 import { compressAudio } from '@/utils/audioCompressor';
-import { trimLeadingSilence } from '@/utils/audioSilenceTrimmer';
+import { trimSilence } from '@/utils/audioSilenceTrimmer';
 import { useAdvancedSpeechAnalysis, SpeechAnalysisResult } from '@/hooks/useAdvancedSpeechAnalysis';
 
 
@@ -513,10 +513,20 @@ export default function AIPracticeSpeakingTest() {
   // This avoids WebM "0:00" metadata issues on some browsers and improves playback compatibility.
   const toMp3DataUrl = async (blob: Blob, key: string) => {
     try {
-      // Step 1: Trim leading silence (up to 3s) to prevent STT hallucinations
-      const { blob: trimmedBlob, trimmedMs } = await trimLeadingSilence(blob);
-      if (trimmedMs > 0) {
-        console.log(`[AIPracticeSpeakingTest] Trimmed ${trimmedMs}ms leading silence from ${key}`);
+      // Step 1: Trim leading AND trailing silence to prevent STT hallucinations.
+      // Trailing silence is the most common cause of "extra" invented sentences.
+      const { blob: trimmedBlob, trimmedLeadingMs, trimmedTrailingMs } = await trimSilence(blob, {
+        trimTrailing: true,
+        maxLeadingTrim: 3,
+        maxTrailingTrim: 8,
+        // Slightly conservative defaults; we prefer keeping breath/noise over clipping words.
+        minSilenceDuration: 0.25,
+        silenceThreshold: 0.01,
+      });
+      if (trimmedLeadingMs > 0 || trimmedTrailingMs > 0) {
+        console.log(
+          `[AIPracticeSpeakingTest] Trimmed ${trimmedLeadingMs}ms leading + ${trimmedTrailingMs}ms trailing silence from ${key}`
+        );
       }
       
       // Step 2: Compress to MP3

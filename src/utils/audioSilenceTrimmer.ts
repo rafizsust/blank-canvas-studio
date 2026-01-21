@@ -21,6 +21,8 @@ export interface TrimConfig {
   trimTrailing?: boolean;
   /** Maximum leading silence to trim (seconds). Default 3 */
   maxLeadingTrim?: number;
+  /** Maximum trailing silence to trim (seconds). Default 8 */
+  maxTrailingTrim?: number;
 }
 
 const DEFAULT_CONFIG: Required<TrimConfig> = {
@@ -29,6 +31,7 @@ const DEFAULT_CONFIG: Required<TrimConfig> = {
   minSilenceDuration: 0.2,
   trimTrailing: false,
   maxLeadingTrim: 3,
+  maxTrailingTrim: 8,
 };
 
 /**
@@ -87,11 +90,18 @@ function findSpeechEnd(
 ): number {
   const windowSamples = Math.floor(sampleRate * config.windowSize);
   const minSilenceSamples = Math.floor(sampleRate * config.minSilenceDuration);
+  const maxTrailingTrimSamples = Math.floor(sampleRate * config.maxTrailingTrim);
 
   let silentSamples = 0;
   let lastSpeechIdx = samples.length;
 
   for (let i = samples.length - windowSamples; i >= 0; i -= windowSamples) {
+    // Don't scan beyond our max trailing trim budget.
+    // If we haven't found speech within this range, keep original end.
+    if (silentSamples > maxTrailingTrimSamples) {
+      return samples.length;
+    }
+
     const rms = computeRMS(samples, i, windowSamples);
     if (rms >= config.silenceThreshold) {
       if (silentSamples >= minSilenceSamples) {
@@ -111,10 +121,10 @@ function findSpeechEnd(
  * Returns a new Blob with silence removed.
  * Falls back to original blob if trimming fails or no silence detected.
  */
-export async function trimLeadingSilence(
+export async function trimSilence(
   audioBlob: Blob,
   config: TrimConfig = {}
-): Promise<{ blob: Blob; trimmedMs: number }> {
+): Promise<{ blob: Blob; trimmedLeadingMs: number; trimmedTrailingMs: number }> {
   const cfg: Required<TrimConfig> = { ...DEFAULT_CONFIG, ...config };
 
   try {
@@ -144,19 +154,23 @@ export async function trimLeadingSilence(
     // No meaningful trim needed
     if (speechStart === 0 && speechEnd === samples.length) {
       await audioContext.close();
-      return { blob: audioBlob, trimmedMs: 0 };
+      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
     }
 
     const trimmedSamples = speechEnd - speechStart;
     if (trimmedSamples < sampleRate * 0.5) {
       // Less than 0.5s of audio would remain; skip trim
       await audioContext.close();
-      return { blob: audioBlob, trimmedMs: 0 };
+      return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
     }
 
-    const trimmedMs = Math.round((speechStart / sampleRate) * 1000);
+    const trimmedLeadingMs = Math.round((speechStart / sampleRate) * 1000);
+    const trimmedTrailingMs = Math.max(
+      0,
+      Math.round(((samples.length - speechEnd) / sampleRate) * 1000)
+    );
     console.log(
-      `[audioSilenceTrimmer] Trimming ${trimmedMs}ms leading silence (${speechStart} samples at ${sampleRate}Hz)`
+      `[audioSilenceTrimmer] Trimming ${trimmedLeadingMs}ms leading silence and ${trimmedTrailingMs}ms trailing silence (${speechStart}-${speechEnd} of ${samples.length} samples at ${sampleRate}Hz)`
     );
 
     // Create new AudioBuffer with trimmed audio
@@ -178,11 +192,25 @@ export async function trimLeadingSilence(
     const wavBlob = audioBufferToWav(trimmedBuffer);
     await audioContext.close();
 
-    return { blob: wavBlob, trimmedMs };
+    return { blob: wavBlob, trimmedLeadingMs, trimmedTrailingMs };
   } catch (err) {
     console.warn('[audioSilenceTrimmer] Failed to trim silence:', err);
-    return { blob: audioBlob, trimmedMs: 0 };
+    return { blob: audioBlob, trimmedLeadingMs: 0, trimmedTrailingMs: 0 };
   }
+}
+
+/**
+ * Backwards-compatible helper: trims leading silence only.
+ */
+export async function trimLeadingSilence(
+  audioBlob: Blob,
+  config: TrimConfig = {}
+): Promise<{ blob: Blob; trimmedMs: number }> {
+  const { blob, trimmedLeadingMs } = await trimSilence(audioBlob, {
+    ...config,
+    trimTrailing: false,
+  });
+  return { blob, trimmedMs: trimmedLeadingMs };
 }
 
 /**
