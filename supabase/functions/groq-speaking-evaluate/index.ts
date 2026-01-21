@@ -26,11 +26,21 @@ const corsHeaders = {
 
 const GROQ_LLM_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-// Llama 3.3 70B Versatile - 128K context, excellent reasoning, free tier
-// Recommended replacement after DeepSeek deprecation
-const GROQ_LLM_MODEL = 'llama-3.3-70b-versatile';
+// =============================================================================
+// GROQ LLM MODEL FALLBACK CHAIN (Speaking Evaluation)
+// =============================================================================
+// Primary: Qwen3 32B - 400 T/s, 300K TPM, excellent reasoning
+// Fallback1: Llama 3.3 70B - 280 T/s, 300K TPM, very capable
+// Fallback2: Llama 3.1 8B - 560 T/s, 250K TPM, fast emergency fallback
+// =============================================================================
+const GROQ_LLM_MODELS = [
+  'qwen/qwen3-32b',           // Primary: Fast, good reasoning, 300K TPM
+  'llama-3.3-70b-versatile',  // Fallback1: Best quality, 300K TPM
+  'llama-3.1-8b-instant',     // Fallback2: Fast emergency, 250K TPM
+];
+const GROQ_LLM_MODEL = GROQ_LLM_MODELS[0]; // Primary model for single-model calls
 
-async function callGroqLLMWithTokenFallback(opts: {
+async function callGroqLLMWithModelFallback(opts: {
   apiKey: string;
   prompt: string;
   maxTokensCandidates: number[];
@@ -64,36 +74,60 @@ async function callGroqLLMWithTokenFallback(opts: {
 
 FAILURE TO MEET WORD COUNTS OR UPGRADE COUNTS IS UNACCEPTABLE.`;
 
-  let lastResponse: Response | null = null;
-  for (const maxTokens of opts.maxTokensCandidates) {
-    const res = await fetch(GROQ_LLM_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${opts.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: GROQ_LLM_MODEL,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: opts.prompt },
-        ],
-        temperature: 0.2,
-        max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
-      }),
-    });
+  // Try each model in the fallback chain
+  for (const model of GROQ_LLM_MODELS) {
+    let lastResponse: Response | null = null;
+    
+    // For each model, try different token limits
+    for (const maxTokens of opts.maxTokensCandidates) {
+      console.log(`[groq-speaking-evaluate] Trying model ${model} with max_tokens=${maxTokens}`);
+      
+      const res = await fetch(GROQ_LLM_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${opts.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: opts.prompt },
+          ],
+          temperature: 0.2,
+          max_tokens: maxTokens,
+          response_format: { type: 'json_object' },
+        }),
+      });
 
-    // If token setting is rejected, try next candidate.
-    if (!res.ok && (res.status === 400 || res.status === 422)) {
+      // If token setting is rejected, try next candidate for same model
+      if (!res.ok && (res.status === 400 || res.status === 422)) {
+        lastResponse = res;
+        continue;
+      }
+      
+      // Rate limit or quota - try next model
+      if (res.status === 429) {
+        const errorText = await res.text();
+        console.warn(`[groq-speaking-evaluate] Model ${model} rate limited: ${errorText}`);
+        break; // Move to next model
+      }
+
+      // Success
+      if (res.ok) {
+        console.log(`[groq-speaking-evaluate] Success with model ${model}`);
+        return res;
+      }
+
       lastResponse = res;
-      continue;
     }
-
-    return res;
+    
+    // If we exhausted token candidates for this model, try next model
+    console.log(`[groq-speaking-evaluate] Model ${model} failed, trying next...`);
   }
 
-  return lastResponse || new Response('Failed to call Groq LLM', { status: 500 });
+  console.error(`[groq-speaking-evaluate] All models in fallback chain failed`);
+  return new Response('Failed to call Groq LLM - all models exhausted', { status: 500 });
 }
 
 interface PronunciationEstimate {
@@ -227,14 +261,14 @@ serve(async (req) => {
       partNumbers
     );
 
-    // Call Groq Llama 4 Scout (30K TPM - 2.5x more than Llama 3.3's 12K)
-    console.log(`[groq-speaking-evaluate] Calling ${GROQ_LLM_MODEL}...`);
+    // Call Groq LLM with model fallback chain
+    console.log(`[groq-speaking-evaluate] Calling Groq LLM with fallback chain: ${GROQ_LLM_MODELS.join(' → ')}...`);
     const startTime = Date.now();
 
-    const llmResponse = await callGroqLLMWithTokenFallback({
+    const llmResponse = await callGroqLLMWithModelFallback({
       apiKey: groqApiKey,
       prompt: evaluationPrompt,
-      maxTokensCandidates: [12000, 10000, 8192],  // Increased for Llama 4 Scout's 30K TPM
+      maxTokensCandidates: [12000, 10000, 8192],
     });
 
     if (!llmResponse.ok) {
