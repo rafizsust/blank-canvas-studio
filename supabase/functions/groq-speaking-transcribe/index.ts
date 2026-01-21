@@ -156,14 +156,15 @@ function filterGapHallucinations(words: WhisperWord[]): WhisperWord[] {
   
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
+    const prob = typeof word.probability === 'number' ? word.probability : 0;
     
     // First word is always included (unless it's extremely low confidence)
     if (i === 0) {
-      if (word.probability >= 0.3) {
+      if (prob >= 0.3) {
         filtered.push(word);
         lastValidEnd = word.end;
       } else {
-        console.log(`[groq-speaking-transcribe] Filtering first word (conf=${word.probability.toFixed(2)}): "${word.word}"`);
+        console.log(`[groq-speaking-transcribe] Filtering first word (conf=${prob.toFixed(2)}): "${word.word}"`);
       }
       continue;
     }
@@ -172,8 +173,8 @@ function filterGapHallucinations(words: WhisperWord[]): WhisperWord[] {
     const gap = word.start - lastValidEnd;
     
     // If gap > 2s and confidence is low, this is likely a hallucination
-    if (gap > GAP_DURATION_THRESHOLD && word.probability < POST_GAP_CONFIDENCE_THRESHOLD) {
-      console.log(`[groq-speaking-transcribe] Filtering post-gap hallucination (gap=${gap.toFixed(1)}s, conf=${word.probability.toFixed(2)}): "${word.word}"`);
+    if (gap > GAP_DURATION_THRESHOLD && prob < POST_GAP_CONFIDENCE_THRESHOLD) {
+      console.log(`[groq-speaking-transcribe] Filtering post-gap hallucination (gap=${gap.toFixed(1)}s, conf=${prob.toFixed(2)}): "${word.word}"`);
       continue;
     }
     
@@ -586,6 +587,10 @@ async function transcribeWithWhisper(
   // Also apply DYNAMIC threshold for 2-5s silences (more aggressive filtering)
   const filteredSegments = result.segments?.filter(s => {
     const segmentDuration = (s.end || 0) - (s.start || 0);
+
+    // Some Whisper providers omit these fields; treat missing values conservatively.
+    const noSpeechProb = typeof s.no_speech_prob === 'number' ? s.no_speech_prob : 0;
+    const compressionRatio = typeof s.compression_ratio === 'number' ? s.compression_ratio : 0;
     
     // Dynamic no_speech threshold based on segment duration
     // For 2-5 second segments, use stricter threshold to catch more hallucinations
@@ -596,14 +601,14 @@ async function transcribeWithWhisper(
     }
     
     // Filter by no_speech probability
-    if (s.no_speech_prob > noSpeechThreshold) {
-      console.log(`[groq-speaking-transcribe] Filtering segment (no_speech=${s.no_speech_prob.toFixed(2)}, threshold=${noSpeechThreshold}): "${s.text}"`);
+    if (noSpeechProb > noSpeechThreshold) {
+      console.log(`[groq-speaking-transcribe] Filtering segment (no_speech=${noSpeechProb.toFixed(2)}, threshold=${noSpeechThreshold}): "${s.text}"`);
       return false;
     }
     
     // Filter by compression ratio (hallucinations often have high compression)
-    if (s.compression_ratio > COMPRESSION_RATIO_THRESHOLD) {
-      console.log(`[groq-speaking-transcribe] Filtering segment (compression=${s.compression_ratio.toFixed(2)}): "${s.text}"`);
+    if (compressionRatio > COMPRESSION_RATIO_THRESHOLD) {
+      console.log(`[groq-speaking-transcribe] Filtering segment (compression=${compressionRatio.toFixed(2)}): "${s.text}"`);
       return false;
     }
     
@@ -615,7 +620,7 @@ async function transcribeWithWhisper(
     
     // Additional check: very short text in longer segments is suspicious
     const wordCount = (s.text?.split(/\s+/) || []).length;
-    if (segmentDuration > 3 && wordCount <= 2 && s.no_speech_prob > 0.2) {
+    if (segmentDuration > 3 && wordCount <= 2 && noSpeechProb > 0.2) {
       console.log(`[groq-speaking-transcribe] Filtering suspicious short segment (${wordCount}w in ${segmentDuration.toFixed(1)}s): "${s.text}"`);
       return false;
     }
