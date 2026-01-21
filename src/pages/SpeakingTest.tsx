@@ -32,7 +32,7 @@ const TIMING = {
   PART1_QUESTION: 30,  // 30 seconds per Part 1 question
   PART2_PREP: 60,      // 1 minute preparation
   PART2_SPEAK: 120,    // 2 minutes speaking
-  PART3_QUESTION: 45,  // 45 seconds per Part 3 question
+  PART3_QUESTION: 60,  // 60 seconds per Part 3 question (increased from 45)
 } as const;
 
 // Extend SpeakingQuestionGroup to include the joined speaking_questions

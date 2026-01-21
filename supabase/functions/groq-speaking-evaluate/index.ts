@@ -785,9 +785,10 @@ Stats: ${t.wordCount}w | ${wpm}wpm | ${pauseCount} pauses`;
   const part2Words = part2Transcripts.reduce((sum, t) => sum + t.wordCount, 0);
   
   // Build modelAnswers requirement with STRICT word count enforcement
+  // Part 2 requires ~150 words for model answer (speaking naturally at ~120 WPM for 75-90s)
   const modelAnswersReq = transcriptions.map(t => {
     const limits = t.partNumber === 2 
-      ? { min: 180, target: 200 } 
+      ? { min: 150, target: 180 }  // Part 2: ~150 words (natural speaking pace for 75-90s)
       : t.partNumber === 3 
         ? { min: 70, target: 85 } 
         : { min: 50, target: 60 };
@@ -799,7 +800,7 @@ Stats: ${t.wordCount}w | ${wpm}wpm | ${pauseCount} pauses`;
     ? `Use Band ${pronunciationEstimate.estimatedBand}. Quote specific low-confidence words if available.`
     : `Use Band ${pronunciationEstimate.estimatedBand}. Provide actionable tips only, NO vague claims.`;
 
-  // Enhanced prompt with all 6 improvements
+  // Enhanced prompt with all improvements
   return `# IELTS Speaking Evaluation Task
 
 ## 1. INPUT CONTEXT
@@ -851,10 +852,10 @@ Each criterion MUST include "justification" (max 20 words of evidence) BEFORE th
 ✅ "justification": "Used 'part and parcel' correctly; hesitated 4 times in long turn"
 ✅ "justification": "90s duration with only 95 words = slow pacing, not short answer"
 
-### 5B. WEAKNESS FORMAT
-Every weakness MUST have quoted evidence:
-✅ "Subject-verb error. Example: '[the people was going]'"
-❌ "May have pronunciation issues" (REJECTED - no evidence)
+### 5B. WEAKNESS FORMAT - TWO POINTS PER CRITERION
+Each criterion MUST have exactly 2 weaknesses (areas to improve), each with quoted evidence:
+✅ "weaknesses": ["Subject-verb error. Example: '[the people was going]'", "Limited linking words. Example: '[and then, and then, and then]'"]
+❌ "weaknesses": ["May have pronunciation issues"] (REJECTED - only 1 item, no evidence)
 
 ### 5C. FEEDBACK EFFICIENCY (Instead of full rewrites)
 Per question provide ONLY:
@@ -866,16 +867,29 @@ Context MUST contain ORIGINAL word, NOT upgraded:
 ✅ {"original": "good", "upgraded": "exceptional", "context": "The service was good"}
 ❌ {"original": "good", "upgraded": "exceptional", "context": "exceptional service"} (WRONG)
 
+### 5E. EXAMINER NOTES (3+ Lines)
+The examiner_notes field MUST contain at least 3 complete sentences providing:
+1. Overall impression of the candidate's speaking ability
+2. Most notable strength demonstrated during the test
+3. Primary area for improvement with specific recommendation
+Example: "The candidate demonstrates solid B2-level English with consistent fluency in extended speech. Their use of idiomatic expressions and topic-specific vocabulary was particularly impressive in Part 2. To reach a higher band, focus on reducing hesitations at the start of responses and varying sentence structures more."
+
+### 5F. MODEL ANSWERS SEPARATION (CRITICAL)
+The model answer word count (~150 words for Part 2) is for DEMONSTRATION purposes only.
+It does NOT affect how you evaluate the candidate. A slow speaker (e.g., 100 words in 120s) may still score well on content if their ideas are developed and coherent.
+- Model Answer for Part 2: Write a fluent, natural ~150-word response demonstrating band 7-8 vocabulary and structures
+- Evaluation: Score based on candidate's ACTUAL transcript using duration metadata for fluency assessment
+
 ## 6. OUTPUT SCHEMA (Valid JSON)
 {
   "criteria": {
-    "fluency_coherence": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue. Example: '[quote]'"], "suggestions": ["..."]},
-    "lexical_resource": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue. Example: '[quote]'"], "suggestions": ["..."]},
-    "grammatical_range": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue. Example: '[quote]'"], "suggestions": ["..."]},
-    "pronunciation": {"justification": "<20 words>", "band": <5-8>, "feedback": "...", "strengths": ["..."], "weaknesses": ["..."], "suggestions": ["..."]}
+    "fluency_coherence": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue 1. Example: '[quote]'", "Issue 2. Example: '[quote]'"], "suggestions": ["..."]},
+    "lexical_resource": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue 1. Example: '[quote]'", "Issue 2. Example: '[quote]'"], "suggestions": ["..."]},
+    "grammatical_range": {"justification": "<20 words evidence>", "band": <1-9>, "feedback": "<2 sentences>", "strengths": ["..."], "weaknesses": ["Issue 1. Example: '[quote]'", "Issue 2. Example: '[quote]'"], "suggestions": ["..."]},
+    "pronunciation": {"justification": "<20 words>", "band": <5-8>, "feedback": "...", "strengths": ["..."], "weaknesses": ["Issue 1", "Issue 2"], "suggestions": ["..."]}
   },
   "summary": "<2 sentences>",
-  "examiner_notes": "<1 key observation>",
+  "examiner_notes": "<3+ sentences: overall impression, key strength, main improvement area>",
   "modelAnswers": [${modelAnswersReq}],
   "lexical_upgrades": [{"original": "...", "upgraded": "...", "context": "ORIGINAL phrase from transcript"}, ... (10+ entries)],
   "improvement_priorities": ["...", "..."],
@@ -886,9 +900,10 @@ Context MUST contain ORIGINAL word, NOT upgraded:
 1. ✓ Every criterion has "justification" with specific evidence?
 2. ✓ Duration > 90s Part 2 treated as "fully developed"?
 3. ✓ No safety-bias 5.5 scores without justification?
-4. ✓ All weaknesses have quoted transcript examples?
-5. ✓ Lexical upgrade contexts contain ORIGINAL words?
-6. ✓ Part 2 modelAnswer has 180+ words?`;
+4. ✓ Every criterion has exactly 2 weaknesses with quoted examples?
+5. ✓ Examiner_notes has at least 3 complete sentences?
+6. ✓ Lexical upgrade contexts contain ORIGINAL words?
+7. ✓ Part 2 modelAnswer has ~150 words (separate from evaluation)?`;
 }
 
 function getQuestionTextFromPayload(payload: any, partNumber: number, questionNumber: number, segmentKey: string): string {
