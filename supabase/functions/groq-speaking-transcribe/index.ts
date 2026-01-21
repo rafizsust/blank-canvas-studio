@@ -34,12 +34,18 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 // =============================================================================
 // GROQ STT MODEL FALLBACK CHAIN (Transcription)
 // =============================================================================
-// Primary: whisper-large-v3 - 200K ASH, 300 RPM, more accurate
-// Fallback: whisper-large-v3-turbo - 400K ASH, 400 RPM, faster
+// Primary: whisper-large-v3-turbo - Faster, better noise handling, reduced hallucinations
+// Fallback: whisper-large-v3 - More accurate for clear audio but more prone to hallucinations
+// 
+// Turbo is now primary because:
+// 1. Better handling of non-speech sounds (coughs, throat clearing)
+// 2. Reduced hallucination of non-English characters
+// 3. Faster processing (400K ASH vs 200K ASH limit)
+// 4. Similar accuracy for conversational English
 // =============================================================================
 const GROQ_STT_MODELS = [
-  'whisper-large-v3',        // Primary: More accurate, 200K ASH limit
-  'whisper-large-v3-turbo',  // Fallback: Fast, 400K ASH limit
+  'whisper-large-v3-turbo',  // Primary: Fast, better noise handling, 400K ASH limit
+  'whisper-large-v3',        // Fallback: More accurate for clear audio, 200K ASH limit
 ];
 
 // Inter-segment delay (ms) - reduced from 3000ms since we typically have <12 segments
@@ -54,6 +60,7 @@ const NO_SPEECH_THRESHOLD = 0.5;
 const COMPRESSION_RATIO_THRESHOLD = 2.4;
 
 // Hallucination patterns - known Whisper/Distil-Whisper artifacts
+// Expanded list to catch more non-English text and common artifacts
 const HALLUCINATION_PATTERNS = [
   /[가-힣]/g,              // Korean characters
   /[ぁ-んァ-ン]/g,          // Japanese hiragana/katakana
@@ -61,6 +68,13 @@ const HALLUCINATION_PATTERNS = [
   /[ก-๙]/g,               // Thai characters
   /[а-яА-ЯёЁ]/g,          // Cyrillic
   /[؀-ۿ]/g,               // Arabic
+  /[\u0600-\u06FF]/g,     // Arabic Extended
+  /[\u0530-\u058F]/g,     // Armenian (covers Ցosaurs-like artifacts)
+  /[\uAC00-\uD7AF]/g,     // Korean Hangul Syllables
+  /[\u1200-\u137F]/g,     // Ethiopic
+  /[\u0E00-\u0E7F]/g,     // Thai
+  /[\u0980-\u09FF]/g,     // Bengali
+  /[\u0900-\u097F]/g,     // Devanagari
   /thank\s?you\.?\s*$/gi,  // Common hallucination endings
   /thanks\s+for\s+watching/gi,
   /goodbye\.?\s*$/gi,
@@ -71,6 +85,9 @@ const HALLUCINATION_PATTERNS = [
   /\b(Melanie|publication|assembled|member|amara\.org|subtitles|captions)\b/gi,  // Known Whisper artifacts
   /^\s*\.\s*$/g,           // Just a period (common silence hallucination)
   /^\s*,\s*$/g,            // Just a comma
+  /ahem\s*,?\s*ahem/gi,    // Throat clearing hallucinations
+  /oh\s+pants/gi,          // Common nonsense phrases
+  /𝘥𝘦𝘳𝘦𝘴|𝘉𝘮𝘢/gi,           // Unicode styled text (Whisper artifacts)
 ];
 
 // Additional phrases to strip from end of transcripts - ONLY obvious hallucinations

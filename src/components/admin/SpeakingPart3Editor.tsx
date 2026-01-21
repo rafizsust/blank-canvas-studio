@@ -74,7 +74,7 @@ export function SpeakingPart3Editor({
         </CardHeader>
         <CardContent className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            Part 3 uses standard IELTS timing: <strong>45 seconds per question</strong>
+            Part 3 uses extended timing: <strong>60 seconds per question</strong>
           </p>
         </CardContent>
       </Card>

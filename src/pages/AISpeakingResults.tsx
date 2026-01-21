@@ -19,13 +19,9 @@ import {
   Mic,
   RotateCcw,
   Home,
-  ChevronDown,
-  ChevronUp,
   Sparkles,
-  TrendingUp,
   ArrowUpRight,
   MessageSquare,
-  Target,
   Loader2,
   Volume2,
   CheckCircle2,
@@ -334,8 +330,8 @@ export default function AISpeakingResults() {
   const [result, setResult] = useState<SpeakingResult | null>(null);
   const [testPayload, setTestPayload] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [availableParts, setAvailableParts] = useState<number[]>([1, 2, 3]);
-  const [expandedParts, setExpandedParts] = useState<Set<number>>(new Set([1, 2, 3]));
+  // Parts-related state kept for potential future use but not currently displayed
+  const [, setAvailableParts] = useState<number[]>([1, 2, 3]);
   const mountedAtRef = useRef<number>(Date.now());
 
   // Realtime subscription for async evaluation
@@ -527,20 +523,6 @@ export default function AISpeakingResults() {
 
     loadResults();
   }, [testId, navigate, user, authLoading]);
-
-
-  const togglePart = (partNum: number) => {
-    setExpandedParts(prev => {
-      const next = new Set(prev);
-      if (next.has(partNum)) {
-        next.delete(partNum);
-      } else {
-        next.add(partNum);
-      }
-      return next;
-    });
-  };
-
   const getBandColor = (band: number) => {
     if (band >= 7) return 'text-success';
     if (band >= 6) return 'text-warning';
@@ -791,13 +773,12 @@ export default function AISpeakingResults() {
             </div>
           </Card>
 
-          {/* MERGED TABS: Feedback, Review, Lexical, Parts */}
+          {/* MERGED TABS: Feedback, Review, Lexical (Parts tab removed - not used in Groq/Gemini evaluation) */}
           <Tabs defaultValue="feedback" className="mb-6">
-            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-4 h-auto p-1">
+            <TabsList className="w-full overflow-x-auto flex md:grid md:grid-cols-3 h-auto p-1">
               <TabsTrigger value="feedback" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Feedback</TabsTrigger>
               <TabsTrigger value="review" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Review</TabsTrigger>
               <TabsTrigger value="lexical" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Lexical</TabsTrigger>
-              <TabsTrigger value="parts" className="text-xs md:text-sm px-2 md:px-3 py-1.5 whitespace-nowrap">Parts</TabsTrigger>
             </TabsList>
 
             {/* FEEDBACK TAB: Merged Criteria + Improve */}
@@ -1267,88 +1248,6 @@ export default function AISpeakingResults() {
                   </>
                 );
               })()}
-            </TabsContent>
-
-            {/* Part-by-Part Analysis */}
-            <TabsContent value="parts" className="mt-6 space-y-4">
-              {report.part_analysis && report.part_analysis.filter((p) => availableParts.includes(p.part_number)).length > 0 ? (
-                report.part_analysis
-                  .filter((p) => availableParts.includes(p.part_number))
-                  .map((part) => (
-                  <Card key={part.part_number}>
-                    <CardHeader 
-                      className="cursor-pointer"
-                      onClick={() => togglePart(part.part_number)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          <Mic className="w-5 h-5 text-primary" />
-                          Part {part.part_number}
-                        </CardTitle>
-                        {expandedParts.has(part.part_number) ? (
-                          <ChevronUp className="w-5 h-5 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                        )}
-                      </div>
-                    </CardHeader>
-                    {expandedParts.has(part.part_number) && (
-                      <CardContent className="space-y-4">
-                        <p className="text-sm">{part.performance_notes || 'No specific notes for this part.'}</p>
-                        
-                        {part.key_moments && part.key_moments.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <Target className="w-4 h-4 text-primary" />
-                              <span className="font-medium text-sm">Key Moments</span>
-                            </div>
-                            <ul className="space-y-1 pl-6">
-                              {part.key_moments.map((m, i) => (
-                                <li key={i} className="text-sm text-muted-foreground list-disc">{m}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        
-                        {part.areas_for_improvement && part.areas_for_improvement.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <TrendingUp className="w-4 h-4 text-warning" />
-                              <span className="font-medium text-sm">Areas for Improvement</span>
-                            </div>
-                            <ul className="space-y-1 pl-6">
-                              {part.areas_for_improvement.map((a, i) => (
-                                <li key={i} className="text-sm text-muted-foreground list-disc">{a}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {/* Audio Playback if available */}
-                        {result.audio_urls[`part${part.part_number}`] && (
-                          <div className="pt-4 border-t">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Volume2 className="w-4 h-4" />
-                              <span className="font-medium text-sm">Your Recording</span>
-                            </div>
-                            <audio 
-                              controls 
-                              className="w-full" 
-                              src={result.audio_urls[`part${part.part_number}`]} 
-                            />
-                          </div>
-                        )}
-                      </CardContent>
-                    )}
-                  </Card>
-                ))
-              ) : (
-                <Card>
-                  <CardContent className="py-8 text-center">
-                    <p className="text-muted-foreground">Part analysis not available for this test. Check the Feedback tab for detailed feedback.</p>
-                  </CardContent>
-                </Card>
-              )}
             </TabsContent>
           </Tabs>
 
